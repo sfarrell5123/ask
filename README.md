@@ -47,6 +47,7 @@
 3. **Install required dependencies**:
    ```bash
    pip install -r requirements.txt
+   or say pip3.11 install -r requirements.txt
    ```
 4. **Set up environment variables** by creating a `~/.env` file in your home directory with the following content:
    ```bash
@@ -55,8 +56,9 @@
    ```
 5. **Make the script executable**:
    ```bash
-   chmod +x ask.py
-   cp ask.py /usr/local/bin/ask
+   head ask (you might need to change which python you use)
+   chmod +x ask
+   cp ask /usr/local/bin/ask
    ```
 
 ## Usage
