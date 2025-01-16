@@ -1,14 +1,3 @@
-Below is an example of how you might update your **README.md** to reflect:
-
-1. That it was originally created by an AI coding agent.  
-2. Your desire to be acknowledged as the source.  
-3. References (and some content) from your LinkedIn post and article.  
-4. Confirmation that the MIT License is suitable for open-sourcing while retaining credit for the work.
-
-Feel free to adjust or refine the wording as you see fit!
-
----
-
 # ask - Command-Line Assistant
 
 **ask** is a powerful command-line assistant that was originally created by an **AI coding agent**, demonstrating agentic capabilities—planning, writing code, testing, and debugging autonomously. It’s designed to streamline terminal operations using Large Language Models (LLMs) and can even write and execute scripts on your behalf.
