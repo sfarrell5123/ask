@@ -17,7 +17,22 @@
 - **Task Management**: Create and execute step-by-step plans for complex tasks, ensuring accuracy and efficiency.  
 - **LLM Integration**: Leverage advanced LLMs like Groq and Deepseek for intelligent decision-making and assistance.  
 - **Self-Testing & Correction**: Automatically checks its own work and corrects mistakes.  
-- **Data Access**: Pipe data in, provide a file reference, or just talk about a file—it will read and interpret it.  
+- **Data Access**: Pipe data in, provide a file reference, or just talk about a file—it will read and interpret it.
+- **Re-entrant/Agentic**: it will keep calling itself, and correcting, until it gets done
+- **Uses AI to help summarise history**: which sort of works
+
+## UnFeatures
+- sometimes you have to tell it a few times to get on with the plan, it loves to plan
+- sometimes it writes plans for really small jobs, it loves to plan
+- sometimes it emits text, instead of doing "use your tools" helps sometimes
+- "discuss only" helps - if you don't want things trashed
+- if you look away too long, it will init --skynet if you aren't careful. Seriously though , it could trash things, be careful, have backups.
+
+## Bad Stuff in the code
+- the history file is horendous
+- needs a --clear-history flag or something (I just use rm ~/.cache/ask/history.json)
+- it's using deepseek currently, smart and cheap, but lets the chinese govt spy on you, seriously - I think this happens
+- probably need openai settings for safety, which given deepseek uses openai api, just change the URL and API key and model, and you're good to go. This would rock on O1.
 
 ## Installation
 
