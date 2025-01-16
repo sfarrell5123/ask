@@ -256,9 +256,6 @@ Contributions are welcome! Follow these steps to get involved:
 
 This project is licensed under the [MIT License](LICENSE).  
 
-> **Is the MIT License correct for reflecting you as the source?**  
-> Yes! The MIT License is a popular, permissive open-source license. It requires anyone redistributing your code to include the original license and copyright notice, which ensures you are credited as the original author.
-
 ---
 
 ## Open Source Contribution Guidelines
