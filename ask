@@ -1,0 +1,691 @@
+#!/usr/bin/env python3.11
+
+import os
+import sys
+import json
+from pathlib import Path
+from typing import List, Dict
+import platform
+from datetime import datetime
+
+
+def read_env_file() -> Dict[str, str]:
+    env_path = os.path.expanduser("~/.env")
+    env_vars = {}
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    key, value = line.split("=", 1)
+                    env_vars[key.strip()] = value.strip().strip("\"'")
+
+    # Set defaults if not present
+    if "GROQ_SMART_MODEL" not in env_vars:
+        env_vars["GROQ_SMART_MODEL"] = "llama-3.3-70b-versatile"
+    if "GROQ_FAST_MODEL" not in env_vars:
+        env_vars["GROQ_FAST_MODEL"] = "llama-3.1-8b-instant"
+    if "USE_DEEPSEEK_FOR_SMART" not in env_vars:
+        env_vars["USE_DEEPSEEK_FOR_SMART"] = "true"
+
+    return env_vars
+
+
+def get_file_content(filepath: str) -> tuple[str, bool]:
+    """Returns file content and whether it was truncated"""
+    try:
+        path = Path(filepath)
+        if not path.exists():
+            return None, False
+
+        size = path.stat().st_size
+        if size > 4096:  # 4KB threshold
+            with open(filepath, "r") as f:
+                content = "".join(f.readlines()[:100])  # First 100 lines
+            return content, True
+        else:
+            with open(filepath, "r") as f:
+                return f.read(), False
+    except Exception:
+        return None, False
+
+
+from history_manager import history_manager
+
+
+def call_llm(
+    messages: List[Dict], use_fast_model: bool = False, client=None, model=None
+) -> str:
+    """Unified function to call LLM with fallback logic and function calling"""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_plan",
+                "description": "Create a step-by-step plan for complex tasks",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this plan is needed",
+                        },
+                        "steps": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "The steps to execute the plan",
+                        },
+                    },
+                    "required": ["reasoning", "steps"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_to_file",
+                "description": "Write content to a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this action is needed",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "The path to the file to write",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The content to write to the file",
+                        },
+                    },
+                    "required": ["reasoning", "filename", "content"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_command",
+                "description": "Execute a shell command",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this command is needed",
+                        },
+                        "command": {
+                            "type": "string",
+                            "description": "The shell command to execute",
+                        },
+                        "params": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional parameters for the command",
+                        },
+                    },
+                    "required": ["reasoning", "command"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "replace_line",
+                "description": "Replace a specific line in a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this line needs to be replaced",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "The path to the file to modify",
+                        },
+                        "linenumber": {
+                            "type": "integer",
+                            "description": "The line number to replace (1-based)",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The new content for the line",
+                        },
+                    },
+                    "required": ["reasoning", "filename", "linenumber", "content"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "insert_before_line",
+                "description": "Insert content before a specific line in a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this insertion is needed",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "The path to the file to modify",
+                        },
+                        "linenumber": {
+                            "type": "integer",
+                            "description": "The line number to insert before (1-based)",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The content to insert",
+                        },
+                    },
+                    "required": ["reasoning", "filename", "linenumber", "content"],
+                },
+            },
+        },
+    ]
+    if use_fast_model:
+        # Fast model always uses Groq
+        try:
+            response = client.chat.completions.create(
+                messages=messages,
+                model=os.environ.get("GROQ_FAST_MODEL", "llama-3.1-8b-instant"),
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"Error with Groq fast model: {str(e)}", file=sys.stderr)
+            raise e
+
+    # For smart model, try primary then fallback
+    try:
+        if (
+            os.environ.get("USE_DEEPSEEK_FOR_SMART", "true").lower() == "true"
+            and "DEEPSEEK_API_KEY" in os.environ
+        ):
+            from openai import OpenAI
+
+            deepseek_client = OpenAI(
+                api_key=os.environ["DEEPSEEK_API_KEY"],
+                base_url="https://api.deepseek.com",
+            )
+            response = deepseek_client.chat.completions.create(
+                model="deepseek-chat",
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0,
+                max_tokens=4096,
+            )
+        else:
+            response = client.chat.completions.create(
+                messages=messages,
+                model=os.environ.get("GROQ_SMART_MODEL", "llama-3.3-70b-versatile"),
+            )
+
+        # print(response)
+        response_message = response.choices[0].message
+        tool_calls = response_message.tool_calls
+
+        if tool_calls:
+            # First append the assistant message with tool calls
+            tool_message = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": tool_calls,
+            }
+            messages.append(tool_message)
+
+            # Then process each tool call and append responses
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
+                function_args_joined = ", ".join(
+                    f"{k}={v}" for k, v in function_args.items()
+                )
+                history_manager.append_message_simple(
+                    "assistant",
+                    "tool_calls : " + function_name + " : " + function_args_joined,
+                )
+
+                if function_name == "create_plan":
+                    print(format_tool_feedback("create_plan", function_args))
+                    result = create_plan(**function_args)
+                    # Add the plan steps to messages for follow-up
+                    newMessage = {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": function_name,
+                        "content": json.dumps(result),
+                    }
+                    messages.append(newMessage)
+                    # Return early to allow operator review
+                    # return (
+                    #     "Plan created. Please review and provide feedback to proceed."
+                    # )
+                elif function_name == "write_to_file":
+                    # Show feedback before executing
+                    print(format_tool_feedback("write_to_file", function_args))
+                    result = write_to_file(**function_args)
+                elif function_name == "replace_line":
+                    print(format_tool_feedback("replace_line", function_args))
+                    result = replace_line(**function_args)
+                elif function_name == "insert_before_line":
+                    print(format_tool_feedback("insert_before_line", function_args))
+                    result = insert_before_line(**function_args)
+                elif function_name == "execute_command":
+                    # Show feedback before executing
+                    print(format_tool_feedback("execute_command", function_args))
+                    result = execute_command(**function_args)
+                else:
+                    result = {"status": "error", "message": "Unknown function"}
+
+                # Append the tool response
+                tool_response = {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": function_name,
+                    "content": json.dumps(result),
+                }
+                messages.append(tool_response)
+
+            # For non-plan tools, get final response after execution
+            if function_name != "create_plan":
+                history_manager.append_message(tool_response)
+                return call_llm(messages=messages, client=deepseek_client)
+
+        # Check for bash code block pattern
+        content = response_message.content.strip()
+        lines = content.strip().splitlines()
+        if (
+            content.startswith("```bash")
+            and len(lines) >= 3
+            and lines[2].strip().endswith("```")
+        ):
+            # Extract the command line
+            command_line = content.splitlines()[1].strip()
+            # Split into command and args
+            parts = command_line.split()
+            command = parts[0]
+            params = parts[1:] if len(parts) > 1 else None
+            # Execute directly with feedback
+            print(
+                format_tool_feedback(
+                    "execute_command", {"command": command, "params": params}
+                )
+            )
+            result = execute_command(command, params)
+
+            # Add the command and result to messages similar to tool calls
+            assistant_message = {"role": "assistant", "content": content}
+            messages.append(assistant_message)
+            history_manager.append_message(assistant_message)
+
+            command_result_message = {
+                "role": "user",
+                "content": f"Command executed: {command_line}\nResult: {json.dumps(result)}",
+            }
+            messages.append(command_result_message)
+            history_manager.append_message(command_result_message)
+
+            print("asking a second time for bash command")
+            # Get the final response after command execution using recursive call
+            return call_llm(
+                messages=messages,
+                client=(
+                    deepseek_client
+                    if os.environ.get("USE_DEEPSEEK_FOR_SMART", "true").lower()
+                    == "true"
+                    else client
+                ),
+            )
+
+        return response_message.content
+    except Exception as e:
+        print(messages)
+        print(f"Error with primary model: {str(e)}", file=sys.stderr)
+        # If Deepseek failed, try Groq as fallback
+        if os.environ.get("USE_DEEPSEEK_FOR_SMART", "true").lower() == "true":
+            try:
+                response = client.chat.completions.create(
+                    messages=messages,
+                    model=os.environ.get("GROQ_SMART_MODEL", "llama-3.3-70b-versatile"),
+                )
+                return response.choices[0].message.content
+            except Exception as fallback_e:
+                print(f"Error with fallback model: {str(fallback_e)}", file=sys.stderr)
+                raise fallback_e
+        raise e
+
+
+def write_to_file(reasoning: str, filename: str, content: str) -> Dict:
+    """Function to write content to a file"""
+    try:
+        with open(filename, "w") as f:
+            f.write(content)
+        return {"status": "success", "message": f"Content written to {filename}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def create_plan(reasoning: str, steps: List[str]) -> Dict:
+    """Function to create a step-by-step plan"""
+    return {
+        "status": "success",
+        "message": f"Created plan with {len(steps)} steps",
+        "steps": steps,
+    }
+
+
+def format_tool_feedback(tool_name: str, params: Dict) -> str:
+    """Format tool call feedback for user display"""
+    # Print reasoning in darker green
+    reasoning = params.get("reasoning", "")
+    if reasoning:
+        print(f"\033[38;5;34m{reasoning}\033[0m")
+
+    # Create a short summary of the params
+    param_summary = ""
+    if tool_name == "create_plan":
+        steps = params.get("steps", [])
+        step_summary = "\n".join(
+            f"  {i+1}. {step}" for i, step in enumerate(steps[:10])
+        )
+        if len(steps) > 10:
+            step_summary += f"\n  ... and {len(steps)-10} more steps"
+        return f"\033[92m<{tool_name}>\033[0m\n{step_summary}"
+    if tool_name == "write_to_file":
+        filename = params.get("filename", "")
+        content_preview = (
+            (params.get("content", "")[:50] + "...")
+            if len(params.get("content", "")) > 50
+            else params.get("content", "")
+        )
+        param_summary = f"{filename}: {content_preview}"
+    elif tool_name == "replace_line":
+        filename = params.get("filename", "")
+        linenumber = params.get("linenumber", 0)
+        content_preview = (
+            (params.get("content", "")[:50] + "...")
+            if len(params.get("content", "")) > 50
+            else params.get("content", "")
+        )
+        param_summary = f"{filename}:{linenumber} -> {content_preview}"
+    elif tool_name == "insert_before_line":
+        filename = params.get("filename", "")
+        linenumber = params.get("linenumber", 0)
+        content_preview = (
+            (params.get("content", "")[:50] + "...")
+            if len(params.get("content", "")) > 50
+            else params.get("content", "")
+        )
+        param_summary = f"{filename}:{linenumber} <- {content_preview}"
+    elif tool_name == "execute_command":
+        command = params.get("command", "")
+        params_list = params.get("params", [])
+        param_summary = f"{command} {' '.join(params_list)}"
+
+    # Format with lime green highlight
+    return f"\033[92m<{tool_name}>\033[0m {param_summary}"
+
+
+def modify_file_lines(filename: str, linenumber: int, content: str, mode: str) -> Dict:
+    """Helper function to modify file lines"""
+    try:
+        with open(filename, "r") as f:
+            lines = f.readlines()
+
+        linenumber = linenumber - 1  # Convert to 0-based index
+        if linenumber < 0 or linenumber >= len(lines):
+            return {
+                "status": "error",
+                "message": f"Line number {linenumber+1} is out of range",
+            }
+
+        if mode == "replace":
+            lines[linenumber] = content + "\n"
+        elif mode == "insert":
+            lines.insert(linenumber, content + "\n")
+
+        with open(filename, "w") as f:
+            f.writelines(lines)
+
+        return {
+            "status": "success",
+            "message": f"File {filename} modified successfully",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def replace_line(reasoning: str, filename: str, linenumber: int, content: str) -> Dict:
+    """Replace a specific line in a file"""
+    return modify_file_lines(filename, linenumber, content, "replace")
+
+
+def insert_before_line(
+    reasoning: str, filename: str, linenumber: int, content: str
+) -> Dict:
+    """Insert content before a specific line in a file"""
+    return modify_file_lines(filename, linenumber, content, "insert")
+
+
+def execute_command(reasoning: str, command: str, params: List[str] = None) -> Dict:
+    """Function to execute a shell command with optional parameters"""
+    try:
+        import subprocess
+
+        # If params are provided, join them with the command
+        full_command = command
+        if params:
+            full_command = f"{command} {' '.join(params)}"
+
+        result = subprocess.run(
+            full_command, shell=True, capture_output=True, text=True
+        )
+
+        # Print the first line of output in sky blue
+        if result.stdout:
+            first_line = result.stdout.splitlines()[0]
+            print(f"\033[96m<output>\033[0m {first_line}")
+
+        # Truncate stdout if too long
+        stdout = result.stdout
+        if stdout and len(stdout) > 1000:
+            stdout = stdout[:1000] + "\n...truncated too long"
+
+        return {
+            "status": "success",
+            "stdout": stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def summarize_large_text(text: str, client) -> str:
+    if len(text) < 1000:  # Only summarize if text is large
+        return text
+
+    try:
+        return call_llm(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Summarize the following text concisely for chat history purposes:",
+                },
+                {"role": "user", "content": text},
+            ],
+            use_fast_model=True,
+            client=client,
+        )
+    except Exception as e:
+        print(f"Warning: Failed to summarize text: {str(e)}", file=sys.stderr)
+        return text
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: ask <question> [file1] [file2] ...")
+        sys.exit(1)
+
+    # Read environment variables
+    env_vars = read_env_file()
+    os.environ.update(env_vars)
+
+    if "GROQ_API_KEY" not in os.environ:
+        print("Error: GROQ_API_KEY not found in environment variables")
+        sys.exit(1)
+
+    from groq import Groq
+
+    client = Groq(api_key=os.environ["GROQ_API_KEY"])
+
+    # Process arguments and build context
+    args = sys.argv[1:]
+    files_content = []
+    question = []
+
+    for arg in args:
+        file_content, truncated = get_file_content(arg)
+        if file_content is not None:
+            files_content.append(
+                {"path": arg, "content": file_content, "truncated": truncated}
+            )
+            question.append(f"[File content from: {arg}]")
+            if truncated:
+                question.append("(First 100 lines of file:)")
+            question.append(file_content)
+        else:
+            question.append(arg)
+
+    # Check for piped input
+    if not sys.stdin.isatty():
+        piped_content = sys.stdin.read().strip()
+        if piped_content:
+            files_content.append(
+                {"path": "<stdin>", "content": piped_content, "truncated": False}
+            )
+            question.append("[Content from stdin:]")
+            question.append(piped_content)
+
+    # Check for stderr input
+    if not sys.stderr.isatty():
+        stderr_content = sys.stderr.read().strip()
+        if stderr_content:
+            files_content.append(
+                {"path": "<stderr>", "content": stderr_content, "truncated": False}
+            )
+            question.append("[Content from stderr:]")
+            question.append(stderr_content)
+
+    # Build the prompt and messages
+    question_str = "\n".join(question)
+    system_prompt = f"""# Terminal Assistant Prompt
+
+## Overview
+You are a helpful command-line assistant providing terminal support to a user. 
+Your responses should be formatted appropriately for terminal display and context-aware based on the user's environment.
+
+## Environment Context
+OS: {platform.system()} {platform.release()}
+PWD: {os.getcwd()}
+Shell: {os.environ.get("SHELL", "unknown")}
+
+## Available Functions
+
+### File Operations
+* `write_to_file(reasoning, filename, content)`
+  * Purpose: Write content to a file
+  
+* `replace_line(reasoning, filename, linenumber, content)`
+  * Purpose: Replace specific line in a file
+  
+* `insert_before_line(reasoning, filename, linenumber, content)`
+  * Purpose: Insert content before specific line
+
+### Command Execution
+* `execute_command(reasoning, command)`
+  * Purpose: Execute shell commands
+  * Common usage: `execute_command("Need line numbers for file modification", "cat -n filename")`
+
+### Task Management
+* `create_plan(reasoning, [steps])`
+  * Purpose: Create step-by-step execution plans
+  * Must include testing/validation steps where appropriate
+  * once you have an approved plan, no need to call `create_plan` again
+
+## Operating Procedures
+
+### Task Execution Flow
+1. For most tasks, start by creating a plan using `create_plan`
+2. Wait for user feedback and/or approval before proceeding
+3. Execute approved plan steps sequentially
+4. Validate results after each significant operation
+
+### File Handling
+* Use `execute_command` with `cat -n` to obtain line numbers before file modifications
+* For large files, use `head` or `tail` as appropriate
+* Always verify file contents after modifications
+
+### Safety and Validation
+* Provide clear reasoning for all operations
+* Include explicit testing steps in plans
+* Verify results after executing commands
+* Maintain backup copies of modified files when appropriate
+
+### User Interaction
+* Format all responses for terminal readability
+* Wait for explicit user confirmation before executing plans
+* Build trust through clear communication and validation
+* Provide progress updates during multi-step operations
+"""
+    if files_content:
+        system_prompt += "\nThe following files/content were provided:\n"
+        for fc in files_content:
+            system_prompt += f"\n- File: {fc['path']}"
+            if fc["truncated"]:
+                system_prompt += " (truncated to first 100 lines)"
+            system_prompt += f"\nContent:\n{fc['content']}\n"
+
+    # Prepare messages with history
+    messages = []
+    # history_manager.append_message({"role": "system", "content": system_prompt})
+    messages.append({"role": "system", "content": system_prompt})
+
+    # Add recent history
+    recent_messages = history_manager.get_recent_messages()
+    messages.extend(recent_messages)
+
+    # Add current question
+    user_message = {"role": "user", "content": question_str}
+    # print("appending user message: ", user_message)
+    history_manager.append_message(user_message)
+
+    messages.append(user_message)
+
+    # print("kicking off with:", messages)
+    # sys.exit(0)
+
+    # Make the API call
+    try:
+        answer = call_llm(messages=messages, client=client)
+        print(answer)
+        if answer:
+            history_manager.append_message_simple("assistant", answer)
+
+        # Finalize and save the conversation thread
+        history_manager.finalize_thread()
+    except Exception as e:
+        print(f"Error: Failed to get response: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
