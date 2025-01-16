@@ -3,7 +3,7 @@
 **ask** is a powerful command-line assistant that was originally created by an **AI coding agent**, demonstrating agentic capabilities—planning, writing code, testing, and debugging autonomously. It’s designed to streamline terminal operations using Large Language Models (LLMs) and can even write and execute scripts on your behalf.
 
 > **Read more about the AI origins and screenshots in my LinkedIn post:**  
-> [This is my AI software agent, that makes software!](https://www.linkedin.com/feed/update/urn:li:activity:7284242742518394880)  
+> [This is my AI software agent, that makes software!](https://www.linkedin.com/posts/sfarrell5123_this-is-my-ai-software-agent-that-makes-activity-7284232256519315456-hQ7m)  
 > or check out the full article:  
 > [AI: Making My ‘ask’ Command Line Helper Dude](https://www.linkedin.com/pulse/ai-making-my-ask-command-line-helper-dude-scott-farrell-e4hoc/)
 
