@@ -118,8 +118,29 @@ ask "explain this function" utils.py
    ```
 
 3. Install required Python packages:
+
+   **Option A: Using pip directly:**
    ```bash
-   pip3 install openai
+   pip3 install -r requirements.txt
+   ```
+
+   **Option B: Using Conda/Miniconda (recommended for isolated environments):**
+   ```bash
+   # Create a new conda environment
+   conda create -n ask python=3.11 -y
+   conda activate ask
+
+   # Install dependencies
+   pip install -r requirements.txt
+   ```
+
+   If using conda, add this alias to your shell config (`~/.zshrc` or `~/.bash_profile`):
+   ```bash
+   # Example for Miniconda on macOS
+   alias ask='~/miniforge3/envs/ask/bin/python ~/dev/ask/ask'
+
+   # Or more generic:
+   alias ask='conda run -n ask python /path/to/ask/ask'
    ```
 
 4. Create a `.env` file in your home directory with your API key:
@@ -141,8 +162,11 @@ ask "explain this function" utils.py
    **On macOS:**
    Add an alias to your shell config (`~/.zshrc` or `~/.bash_profile`):
    ```bash
-   # For systems using Python from Homebrew/Miniforge
-   alias ask='/path/to/python /Users/yourusername/dev/ask/ask'
+   # Using conda environment (if you set up conda in step 3):
+   alias ask='~/miniforge3/envs/ask/bin/python ~/dev/ask/ask'
+
+   # Or for Homebrew Python:
+   alias ask='/opt/homebrew/bin/python3 /Users/yourusername/dev/ask/ask'
 
    # Or if the script's shebang works for you:
    alias ask='/Users/yourusername/dev/ask/ask'
