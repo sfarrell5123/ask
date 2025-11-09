@@ -1424,13 +1424,13 @@ def handle_file_operation(operation_type: str, data: Dict) -> str:
 
 
 def main():
+    # Read environment variables FIRST (before argparse checks for --help)
+    env_vars = read_env_file()
+    os.environ.update(env_vars)
+
     if len(sys.argv) < 2:
         print("Usage: ask <question> [file1] [file2] ...")
         sys.exit(1)
-
-    # Read environment variables
-    env_vars = read_env_file()
-    os.environ.update(env_vars)
 
     # Check for clear history flag
     if "--clear" in sys.argv:
