@@ -1462,8 +1462,8 @@ def main():
             print(f"\033[38;5;220m⚠ History: {file_size:,} bytes (>10KB) - Consider: ask --compact\033[0m", file=sys.stderr)
 
     # Initialize argument parser
-    # Build API key status for help text
-    openrouter_status = "✓ Available" if os.environ.get("OPENROUTER_API_KEY") else "✗ Not found"
+    # Build API key status for help text (match actual runtime checks)
+    openrouter_status = "✓ Available" if "OPENROUTER_API_KEY" in os.environ else "✗ Not found"
     tavily_status = "✓ Available" if (TAVILY_AVAILABLE and os.environ.get("TAVILY_API_KEY")) else "✗ Not found"
 
     epilog_text = f"""
