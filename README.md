@@ -44,6 +44,9 @@ Conversation history means you can iterate naturally, building on previous comma
 
 ## Real-World Examples
 
+> 📖 **[See a complete system audit example](examples/system-audit.md)** - Watch `ask` perform a comprehensive 11-step audit of filesystem changes, services, and system health with automatic planning, execution, and verification.
+> 🎨 **[View the beautiful HTML version](examples/system-audit.html)** - Same example with modern styling and interactive UI.
+
 ### System Administration & Operations
 ```bash
 ask "show disk usage sorted by size"

@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Audit Example - Ask CLI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'reasoning': '#B0B8F7',     // Light lavender
+                        'tool': '#00FF00',          // Bright green
+                        'output': '#00FFFF',        // Cyan
+                        'step': '#90EE90',          // Light green
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+        .glass {
+            background: rgba(30, 30, 30, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        summary {
+            cursor: pointer;
+            user-select: none;
+        }
+        summary:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        pre {
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body class="p-8 font-mono text-sm">
+    <div class="max-w-6xl mx-auto">
+        <!-- Header -->
+        <div class="glass rounded-lg p-6 mb-6">
+            <h1 class="text-3xl font-bold text-white mb-2">System Audit Example: Bootscratch Filesystem</h1>
+            <p class="text-gray-400">Demonstrating comprehensive system audit with planning, execution, and verification</p>
+        </div>
+
+        <!-- Initial Command -->
+        <div class="glass rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">📝 The Task</h2>
+            <div class="bg-black rounded p-4">
+                <span class="text-gray-500">root@ve1:/data4/dev/ask#</span>
+                <span class="text-white"> ask </span>
+                <span class="text-yellow-300">"can you audit our changes for bootscratch and related services, make sure they are effective and active, and the change is accurate"</span>
+            </div>
+            <div class="mt-3 text-gray-400">
+                <span class="text-gray-500">selected model:</span> moonshotai/kimi-k2-thinking
+            </div>
+        </div>
+
+        <!-- Planning Phase -->
+        <div class="glass rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">🧠 Planning Phase</h2>
+            <div class="mb-3" style="color: #B0B8F7;">
+                Need to audit all changes made to bootscratch filesystem and related services to ensure they are effective, accurate, and properly configured. This includes fstab, mount options, kernel settings, fstrim, and service status.
+            </div>
+            <div class="bg-black rounded p-4">
+                <div class="text-green-400 mb-2">&lt;create_plan&gt;</div>
+                <ol class="space-y-1 text-gray-300 ml-4">
+                    <li>1. Verify fstab configuration for bootscratch entry</li>
+                    <li>2. Check current mount options and compare with fstab</li>
+                    <li>3. Verify kernel VM dirty settings (current values)</li>
+                    <li>4. Verify sysctl configuration file persistence</li>
+                    <li>5. Check fstrim timer status and schedule</li>
+                    <li>6. Review fstrim logs for recent activity</li>
+                    <li>7. Check smbd service status and connections</li>
+                    <li>8. Verify disk health and filesystem status</li>
+                    <li>9. Check system logs for any errors related to bootscratch</li>
+                    <li>10. Test mount option effectiveness (commit interval)</li>
+                    <li class="text-gray-500">... and 1 more steps</li>
+                </ol>
+            </div>
+        </div>
+
+        <!-- Execution Steps -->
+        <div class="glass rounded-lg p-6 mb-6">
+            <h2 class="text-xl font-bold text-white mb-4">⚙️ Execution</h2>
+
+            <!-- Step 1 -->
+            <details class="mb-4 bg-black/50 rounded">
+                <summary class="p-4 font-semibold" style="color: #90EE90;">
+                    Step 1: Verify fstab configuration for bootscratch entry
+                </summary>
+                <div class="p-4 border-t border-gray-700">
+                    <div class="mb-2" style="color: #B0B8F7;">Check the fstab entry for bootscratch mount point</div>
+                    <div class="text-green-400 mb-2">&lt;execute_command&gt; grep -n 'bootscratch' /etc/fstab</div>
+                    <div class="bg-black rounded p-3">
+                        <div style="color: #00FFFF;">&lt;output&gt; 10:UUID=520e76fb-27ef-4830-ab13-94682c9c86c5 /mnt/bootscratch ext4 noatime,nodiratime,commit=600,data=writeback,nofail 0 2</div>
+                    </div>
+                    <div class="mt-2 text-green-400">✓ Configuration found and properly set</div>
+                </div>
+            </details>
+
+            <!-- Step 2 -->
+            <details class="mb-4 bg-black/50 rounded">
+                <summary class="p-4 font-semibold" style="color: #90EE90;">
+                    Step 2: Check current mount options and compare with fstab
+                </summary>
+                <div class="p-4 border-t border-gray-700">
+                    <div class="mb-2" style="color: #B0B8F7;">Verify active mount matches fstab configuration</div>
+                    <div class="text-green-400 mb-2">&lt;execute_command&gt; findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS /mnt/bootscratch</div>
+                    <div class="bg-black rounded p-3">
+                        <div style="color: #00FFFF;">&lt;output&gt; /mnt/bootscratch /dev/nvme1n1p4 ext4 rw,noatime,nodiratime,commit=600,data=writeback</div>
+                    </div>
+                    <div class="mt-2 text-green-400">✓ Mount options match fstab configuration</div>
+                </div>
+            </details>
+
+            <!-- Step 3 -->
+            <details class="mb-4 bg-black/50 rounded">
+                <summary class="p-4 font-semibold" style="color: #90EE90;">
+                    Step 3: Verify kernel VM dirty settings
+                </summary>
+                <div class="p-4 border-t border-gray-700">
+                    <div class="mb-2" style="color: #B0B8F7;">Check kernel virtual memory dirty page settings</div>
+                    <div class="text-green-400 mb-2 overflow-x-auto">&lt;execute_command&gt; echo "=== Kernel VM Dirty Settings ===" && echo "dirty_background_bytes: $(cat /proc/sys/vm/dirty_background_bytes)" && ...</div>
+                    <div class="bg-black rounded p-3 overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-700">
+                                    <th class="text-left py-2" style="color: #00FFFF;">Setting</th>
+                                    <th class="text-left py-2" style="color: #00FFFF;">Value</th>
+                                    <th class="text-left py-2" style="color: #00FFFF;">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody class="text-gray-300">
+                                <tr><td class="py-1">dirty_background_bytes</td><td>1,073,741,824 (1GB)</td><td class="text-green-400">✓</td></tr>
+                                <tr><td class="py-1">dirty_bytes</td><td>0 (using ratio=20, ~9.8GB)</td><td class="text-green-400">✓</td></tr>
+                                <tr><td class="py-1">dirty_writeback_centisecs</td><td>150</td><td class="text-green-400">✓</td></tr>
+                                <tr><td class="py-1">dirty_expire_centisecs</td><td>60,000 (10 minutes)</td><td class="text-green-400">✓</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Step 5 -->
+            <details class="mb-4 bg-black/50 rounded">
+                <summary class="p-4 font-semibold" style="color: #90EE90;">
+                    Step 5: Check fstrim timer status and schedule
+                </summary>
+                <div class="p-4 border-t border-gray-700">
+                    <div class="mb-2" style="color: #B0B8F7;">Verify fstrim service is enabled and scheduled</div>
+                    <div class="text-green-400 mb-2">&lt;execute_command&gt; systemctl is-enabled fstrim.timer && systemctl is-active fstrim.timer && ...</div>
+                    <div class="bg-black rounded p-3">
+                        <div class="text-gray-300 space-y-1">
+                            <div>Status: <span class="text-green-400">enabled</span> and <span class="text-green-400">active</span> ✓</div>
+                            <div>Schedule: Weekly runs on Mondays at 00:54:41 AEDT</div>
+                            <div>Next run: Mon 2025-11-10 00:54:41 (in ~12 hours)</div>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Step 7 -->
+            <details class="mb-4 bg-black/50 rounded">
+                <summary class="p-4 font-semibold" style="color: #90EE90;">
+                    Step 7: Check Samba service status
+                </summary>
+                <div class="p-4 border-t border-gray-700">
+                    <div class="mb-2" style="color: #B0B8F7;">Verify Samba service is running and healthy</div>
+                    <div class="text-green-400 mb-2">&lt;execute_command&gt; systemctl status smbd --no-pager -l</div>
+                    <div class="bg-black rounded p-3">
+                        <div class="text-gray-300 space-y-1">
+                            <div>Status: <span class="text-green-400">active (running)</span> ✓</div>
+                            <div>Uptime: 1h 22min since 10:52:24 AEDT</div>
+                            <div>Connections: Ready on ports 445/139</div>
+                            <div>Health: Normal operation, no errors</div>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <!-- Step 8 -->
+            <details class="mb-4 bg-black/50 rounded">
+                <summary class="p-4 font-semibold" style="color: #90EE90;">
+                    Step 8: Verify disk health (SMART)
+                </summary>
+                <div class="p-4 border-t border-gray-700">
+                    <div class="mb-2" style="color: #B0B8F7;">Check SSD health metrics</div>
+                    <div class="text-green-400 mb-2">&lt;execute_command&gt; smartctl -a /dev/nvme1n1 | grep -E "(Model|Serial|Temperature|...)"</div>
+                    <div class="bg-black rounded p-3">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-700">
+                                    <th class="text-left py-2" style="color: #00FFFF;">Metric</th>
+                                    <th class="text-left py-2" style="color: #00FFFF;">Value</th>
+                                    <th class="text-left py-2" style="color: #00FFFF;">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody class="text-gray-300">
+                                <tr><td class="py-1">Model</td><td>Fanxiang S501 256GB</td><td class="text-blue-400">ℹ️</td></tr>
+                                <tr><td class="py-1">Temperature</td><td>49°C</td><td class="text-green-400">✓ Normal</td></tr>
+                                <tr><td class="py-1">Available Spare</td><td>100%</td><td class="text-green-400">✓ Excellent</td></tr>
+                                <tr><td class="py-1">Percentage Used</td><td>5%</td><td class="text-green-400">✓ Low wear</td></tr>
+                                <tr><td class="py-1">Data Written</td><td>25.7 TB</td><td class="text-green-400">✓ Reasonable</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </details>
+        </div>
+
+        <!-- Audit Report -->
+        <div class="glass rounded-lg p-6 mb-6">
+            <h2 class="text-2xl font-bold text-white mb-6">📋 AUDIT REPORT: Bootscratch Changes & Related Services</h2>
+
+            <!-- FSTAB -->
+            <div class="mb-6 pb-6 border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-green-400 mb-3">✅ FSTAB Configuration - VERIFIED</h3>
+                <ul class="space-y-1 text-gray-300 ml-4">
+                    <li><span class="text-gray-500">Entry:</span> Line 10 in <code class="bg-black px-2 py-1 rounded">/etc/fstab</code></li>
+                    <li><span class="text-gray-500">UUID:</span> <code class="bg-black px-2 py-1 rounded">520e76fb-27ef-4830-ab13-94682c9c86c5</code> ✓</li>
+                    <li><span class="text-gray-500">Options:</span> <code class="bg-black px-2 py-1 rounded">noatime,nodiratime,commit=600,data=writeback,nofail</code> ✓</li>
+                    <li><span class="text-gray-500">Status:</span> Correctly configured</li>
+                </ul>
+            </div>
+
+            <!-- Mount Options -->
+            <div class="mb-6 pb-6 border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-green-400 mb-3">✅ Mount Options - ACTIVE & EFFECTIVE</h3>
+                <ul class="space-y-1 text-gray-300 ml-4">
+                    <li><span class="text-gray-500">Current mount:</span> <code class="bg-black px-2 py-1 rounded">/dev/nvme1n1p4 on /mnt/bootscratch</code></li>
+                    <li><span class="text-gray-500">Options:</span> <code class="bg-black px-2 py-1 rounded">rw,noatime,nodiratime,commit=600,data=writeback</code> ✓</li>
+                    <li><span class="text-gray-500">Verification:</span> Matches fstab configuration exactly</li>
+                    <li><span class="text-gray-500">Effectiveness:</span> Writeback mode active, 10-minute commit interval in effect</li>
+                </ul>
+            </div>
+
+            <!-- Kernel Settings -->
+            <div class="mb-6 pb-6 border-b border-gray-700">
+                <h3 class="text-lg font-semibold text-green-400 mb-3">✅ Kernel VM Settings - APPLIED & PERSISTENT</h3>
+                <ul class="space-y-1 text-gray-300 ml-4">
+                    <li><code class="bg-black px-2 py-1 rounded">dirty_background_bytes</code>: 1,073,741,824 (1GB) ✓</li>
+                    <li><code class="bg-black px-2 py-1 rounded">dirty_bytes</code>: 0 (using ratio=20, ~9.8GB) ✓</li>
+                    <li><code class="bg-black px-2 py-1 rounded">dirty_writeback_centisecs</code>: 150 ✓</li>
+                    <li><code class="bg-black px-2 py-1 rounded">dirty_expire_centisecs</code>: 60,000 (10 minutes) ✓</li>
+                    <li><span class="text-gray-500">Persistence:</span> Saved in <code class="bg-black px-2 py-1 rounded">/etc/sysctl.d/99-torrents.conf</code> ✓</li>
+                </ul>
+            </div>
+
+            <!-- Summary -->
+            <div class="bg-gradient-to-r from-green-900/20 to-blue-900/20 rounded-lg p-6 mt-6">
+                <h3 class="text-xl font-bold text-white mb-4">🎯 SUMMARY</h3>
+                <p class="text-lg mb-4 text-green-300">All changes are effective, accurate, and active:</p>
+                <ol class="space-y-2 text-gray-300 ml-4">
+                    <li>✅ <strong>Performance tuning:</strong> 10-minute commit, writeback mode, reduced metadata writes</li>
+                    <li>✅ <strong>SSD optimization:</strong> Weekly fstrim instead of continuous discard</li>
+                    <li>✅ <strong>Kernel settings:</strong> Optimized dirty page handling for torrent workloads</li>
+                    <li>✅ <strong>Service continuity:</strong> Samba restarted cleanly, no disruption</li>
+                    <li>✅ <strong>Persistence:</strong> All settings saved and will survive reboot</li>
+                </ol>
+                <div class="mt-4 p-4 bg-black/30 rounded border-l-4 border-green-400">
+                    <p class="text-green-200">The bootscratch filesystem is optimally configured for torrent seeding with improved performance and reduced SSD wear.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- What This Demonstrates -->
+        <div class="glass rounded-lg p-6">
+            <h2 class="text-xl font-bold text-white mb-4">💡 What This Demonstrates</h2>
+            <div class="grid md:grid-cols-2 gap-4">
+                <div class="bg-black/50 rounded p-4">
+                    <div class="text-purple-400 font-semibold mb-2">🧠 Intelligent Planning</div>
+                    <div class="text-gray-400 text-sm">Automatically breaks down complex audit into logical steps</div>
+                </div>
+                <div class="bg-black/50 rounded p-4">
+                    <div class="text-blue-400 font-semibold mb-2">🔍 Comprehensive Analysis</div>
+                    <div class="text-gray-400 text-sm">Checks configuration files, runtime state, logs, and hardware</div>
+                </div>
+                <div class="bg-black/50 rounded p-4">
+                    <div class="text-green-400 font-semibold mb-2">✅ Verification</div>
+                    <div class="text-gray-400 text-sm">Compares expected vs actual state</div>
+                </div>
+                <div class="bg-black/50 rounded p-4">
+                    <div class="text-yellow-400 font-semibold mb-2">📊 Clear Reporting</div>
+                    <div class="text-gray-400 text-sm">Structured summary with status indicators</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

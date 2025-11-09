@@ -11,12 +11,7 @@ import re
 import ast
 import argparse
 import io
-
-import os
-import json
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict
+import time
 from openai import OpenAI
 import traceback
 
@@ -281,24 +276,36 @@ def get_file_content(filepath: str) -> tuple[str, bool]:
 
 
 def extract_json(response: str) -> Optional[Dict]:
-    """Extract JSON from markdown code block if present"""
+    """Extract JSON from response - handles both code blocks and raw JSON"""
 
     if "</think>" in response:
         response = response.split("</think>", 1)[1].strip()
     if "</thinking>" in response:
         response = response.split("</thinking>", 1)[1].strip()
 
+    # Try code block first
     try:
         response = response.replace("```tool_calls", "```json")
         match = re.search(r"```json\n(.*?)\n```", response, re.DOTALL)
         if match:
             return json.loads(match.group(1).strip())
     except json.JSONDecodeError:
-        # Look for code block
-        match = re.search(r"```json\n(.*?)\n```", response, re.DOTALL)
-        if match:
-            return json.loads(match.group(1).strip())
-        return None
+        pass
+
+    # Try raw JSON (no code block)
+    try:
+        # Look for JSON object patterns
+        if '{' in response and '}' in response:
+            # Find first { and try to parse from there
+            start = response.find('{')
+            if start != -1:
+                # Try to decode from first brace
+                obj, _ = json_decoder.raw_decode(response[start:])
+                return obj
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    return None
 
 
 def call_llm(messages: List[Dict], model=None) -> str:
@@ -308,7 +315,7 @@ def call_llm(messages: List[Dict], model=None) -> str:
             "type": "function",
             "function": {
                 "name": "create_plan",
-                "description": "Create a step-by-step plan for complex tasks",
+                "description": "Create a step-by-step plan for complex or multi-step tasks. Use when the task requires multiple operations, coordination, or when you need user approval before proceeding. Include validation/testing steps where appropriate.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -330,7 +337,7 @@ def call_llm(messages: List[Dict], model=None) -> str:
             "type": "function",
             "function": {
                 "name": "write_to_file",
-                "description": "Write content to a file",
+                "description": "Write or overwrite content to a file. Creates the file if it doesn't exist. Use this to create new files or completely replace existing file contents.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -355,7 +362,7 @@ def call_llm(messages: List[Dict], model=None) -> str:
             "type": "function",
             "function": {
                 "name": "execute_command",
-                "description": "Execute a shell command",
+                "description": "Execute a shell command and return its output. Use for system operations, file inspection (cat, ls, grep), running programs, checking status, etc. Avoid interactive commands (vim, nano). Use -y flags to avoid prompts (e.g., apt-get -y).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -381,7 +388,7 @@ def call_llm(messages: List[Dict], model=None) -> str:
             "type": "function",
             "function": {
                 "name": "replace_line",
-                "description": "Replace a specific line in a file",
+                "description": "Replace a specific line in an existing file. Use execute_command with 'cat -n filename' first to see line numbers and identify which line to replace. Line numbers are 1-based.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -410,7 +417,7 @@ def call_llm(messages: List[Dict], model=None) -> str:
             "type": "function",
             "function": {
                 "name": "insert_before_line",
-                "description": "Insert content before a specific line in a file",
+                "description": "Insert new content before a specific line in an existing file. Use execute_command with 'cat -n filename' first to see line numbers. Line numbers are 1-based.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -452,20 +459,50 @@ def call_llm(messages: List[Dict], model=None) -> str:
         provider_config = {"provider": {"order": ["DeepSeek", "DeepInfra"]}}
         extra_body_params.update(provider_config)
 
-    try:
-        response = openrouter_client.chat.completions.create(
-                extra_headers={
-                    "HTTP-Referer": "https://ask.com",  # Optional: site URL
-                    "X-Title": "ask",                   # Optional: app name
-                },
-                model=selected_model,
-                messages=messages,
-                temperature=0,
-                max_tokens=4096,
-                tools=tools,
-                tool_choice="auto",
-                extra_body=extra_body_params if extra_body_params else None,
+    # Retry logic for transient errors
+    max_retries = 3
+    retry_delay = 3
+
+    for attempt in range(max_retries):
+        try:
+            response = openrouter_client.chat.completions.create(
+                    extra_headers={
+                        "HTTP-Referer": "https://ask.com",  # Optional: site URL
+                        "X-Title": "ask",                   # Optional: app name
+                    },
+                    model=selected_model,
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=4096,
+                    tools=tools,
+                    tool_choice="auto",
+                    extra_body=extra_body_params if extra_body_params else None,
+                )
+            break  # Success, exit retry loop
+        except Exception as e:
+            error_str = str(e).lower()
+            # Check if it's a transient error
+            is_transient = (
+                "error code: 400" in error_str or
+                "unknown error in the model inference server" in error_str or
+                "error code: 500" in error_str or
+                "error code: 502" in error_str or
+                "error code: 503" in error_str or
+                "timeout" in error_str or
+                "connection" in error_str
             )
+
+            if is_transient and attempt < max_retries - 1:
+                # Orange color for transient error warning
+                wait_time = retry_delay * (attempt + 1)  # Exponential backoff
+                print(f"\033[38;5;208m⚠ Transient error: {str(e)[:80]}\033[0m", file=sys.stderr)
+                print(f"\033[38;5;208m⏳ Waiting {wait_time} seconds before retry {attempt + 2}/{max_retries}...\033[0m", file=sys.stderr)
+                time.sleep(wait_time)
+            else:
+                # Not transient or out of retries, re-raise
+                raise
+
+    try:
 
         # Gracefully handle an empty assistant reply
         if response.usage.completion_tokens == 0:
@@ -592,7 +629,7 @@ def call_llm(messages: List[Dict], model=None) -> str:
                         )
                 elif tool_type == "text_response":
                     if tool.get("reasoning"):
-                        print(f"\\033[32m{tool['reasoning']}\\033[0m")
+                        print(f"\\033[38;5;153m{tool['reasoning']}\\033[0m")
                     return tool["text"]
                 else:
                     print(f"\\033[31mUnknown tool type: {tool_type}\\033[0m")
@@ -706,6 +743,68 @@ def call_llm(messages: List[Dict], model=None) -> str:
             # Recurse to let the assistant generate the follow‑up answer
             return call_llm(messages=messages, model=selected_model)
 
+        # Try XML format tool calls
+        xml_tools = extract_xml_tool_calls(content)
+        if xml_tools:
+            for tool in xml_tools:
+                tool_type = tool.get("tool")
+                if tool_type == "execute_command":
+                    print(format_tool_feedback("execute_command", tool))
+                    result = execute_command(
+                        reasoning=tool.get("reasoning", ""),
+                        command=tool["command"],
+                        params=tool.get("params", []) if isinstance(tool.get("params"), list) else []
+                    )
+                elif tool_type == "create_plan":
+                    print(format_tool_feedback("create_plan", tool))
+                    steps = tool.get("steps", [])
+                    if isinstance(steps, str):
+                        # If steps is a string, try to parse as JSON array
+                        try:
+                            steps = json.loads(steps)
+                        except:
+                            steps = [steps]
+                    result = create_plan(
+                        reasoning=tool.get("reasoning", ""),
+                        steps=steps
+                    )
+                elif tool_type == "write_to_file":
+                    print(format_tool_feedback("write_to_file", tool))
+                    result = write_to_file(
+                        reasoning=tool.get("reasoning", ""),
+                        filename=tool["filename"],
+                        content=tool["content"]
+                    )
+                elif tool_type == "replace_line":
+                    print(format_tool_feedback("replace_line", tool))
+                    result = replace_line(
+                        reasoning=tool.get("reasoning", ""),
+                        filename=tool["filename"],
+                        linenumber=int(tool["linenumber"]),
+                        content=tool["content"]
+                    )
+                elif tool_type == "insert_before_line":
+                    print(format_tool_feedback("insert_before_line", tool))
+                    result = insert_before_line(
+                        reasoning=tool.get("reasoning", ""),
+                        filename=tool["filename"],
+                        linenumber=int(tool["linenumber"]),
+                        content=tool["content"]
+                    )
+                else:
+                    continue
+
+                # Record tool response
+                messages.append({
+                    "role": "tool",
+                    "name": tool_type,
+                    "content": json.dumps(result)
+                })
+                history_manager.append_message(messages[-1])
+
+            # Recurse to get final response
+            return call_llm(messages=messages, model=selected_model)
+
         # Remove any thinking tags and get just the answer content
         answer = content
         for tag in ("</think>", "</thinking>"):
@@ -772,10 +871,10 @@ def create_plan(*, reasoning: str = "", steps: List[str]) -> Dict:
 
 def format_tool_feedback(tool_name: str, params: Dict) -> str:
     """Format tool call feedback for user display"""
-    # Print reasoning in darker green
+    # Print reasoning in light lavender
     reasoning = params.get("reasoning", "")
     if reasoning:
-        print(f"\033[32m{reasoning}\033[0m")
+        print(f"\033[38;5;153m{reasoning}\033[0m")
 
     # Create a short summary of the params
     param_summary = ""
@@ -895,6 +994,67 @@ def execute_command(*, reasoning: str = "", command: str, params: List[str] = No
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+def extract_xml_tool_calls(text: str) -> List[Dict]:
+    """
+    Extract tool calls from XML format like:
+    <function_calls>
+      <invoke name="execute_command">
+        <parameter name="reasoning">...</parameter>
+        <parameter name="command">...</parameter>
+      </invoke>
+    </function_calls>
+    """
+    import re
+    import xml.etree.ElementTree as ET
+
+    tool_calls: List[Dict] = []
+
+    # Look for <function_calls> blocks
+    if "<function_calls>" not in text or "<invoke" not in text:
+        return tool_calls
+
+    try:
+        # Extract the XML content
+        match = re.search(r'<function_calls>(.*?)</function_calls>', text, re.DOTALL)
+        if not match:
+            return tool_calls
+
+        xml_content = f"<function_calls>{match.group(1)}</function_calls>"
+        root = ET.fromstring(xml_content)
+
+        # Process each <invoke> element
+        for invoke in root.findall('invoke'):
+            tool_name = invoke.get('name')
+            if not tool_name:
+                continue
+
+            # Map XML tool names to our function names
+            tool_name_map = {
+                'execute_command': 'execute_command',
+                'create_plan': 'create_plan',
+                'write_to_file': 'write_to_file',
+                'replace_line': 'replace_line',
+                'insert_before_line': 'insert_before_line',
+            }
+
+            if tool_name not in tool_name_map:
+                continue
+
+            # Extract parameters
+            params = {'tool': tool_name_map[tool_name]}
+            for param in invoke.findall('parameter'):
+                param_name = param.get('name')
+                param_value = param.text or ''
+                params[param_name] = param_value
+
+            tool_calls.append(params)
+    except Exception:
+        # If XML parsing fails, return empty list
+        pass
+
+    return tool_calls
 
 
 def extract_tool_calls_from_code_blocks(text: str) -> List[Dict]:
@@ -1167,6 +1327,13 @@ def main():
         show_history_summary()
         sys.exit(0)  # Exit after showing summary
 
+    # Check history file size and suggest compacting if needed
+    if history_manager.history_file.exists():
+        file_size = history_manager.history_file.stat().st_size
+        if file_size > 10000:  # 10KB threshold
+            # Yellow/gold warning on one line
+            print(f"\033[38;5;220m⚠ History: {file_size:,} bytes (>10KB) - Consider: ask --compact\033[0m", file=sys.stderr)
+
     # Initialize argument parser
     parser = argparse.ArgumentParser(
         description="Ask questions and perform tasks using a language model."
@@ -1269,10 +1436,6 @@ OS: {platform.system()} {platform.release()}
 PWD: {os.getcwd()}
 Shell: {os.environ.get("SHELL", "unknown")}
 
-##
-- when thinking provide your thoughts in <think> </think> xml tags.
-- if you have an preamble or postamble, provide it in <think> </think> xml tags.
-
 ## Operating Procedures
   
 ### Task Execution Flow (Refined)
@@ -1294,13 +1457,10 @@ Shell: {os.environ.get("SHELL", "unknown")}
    - Once you have completed all necessary actions and validations, provide a concise, clear response to the user summarizing your findings.
 
 
-## Tools calls
-- dont request interactive tools, like nano, vim, etc.
-- make sure you use option like -y for apt, etc. to avoid interactive prompts.
-    
+## Best Practices
+
 ### File Handling
 * Use `execute_command` with `cat -n` to obtain line numbers before file modifications
-* "tool": "write_to_file", "tool": "modify_file",
 * For large files, use `head` or `tail` as appropriate
 * Always verify file contents after modifications
 
@@ -1313,34 +1473,6 @@ Shell: {os.environ.get("SHELL", "unknown")}
 ### User Interaction
 * Format all responses for terminal readability
 * Wait for explicit user confirmation before executing plans
-* Build trust through clear communication and validation
-* Provide progress updates during multi-step operations
-* "tool": "text_response"
-
-"""
-    system_prompt += """
-## Available Functions
-
-### File Operations
-* `write_to_file(reasoning, filename, content)`
-  * Purpose: Write content to a file
-  
-* `replace_line(reasoning, filename, linenumber, content)`
-  * Purpose: Replace specific line in a file
-  
-* `insert_before_line(reasoning, filename, linenumber, content)`
-  * Purpose: Insert content before specific line
-
-### Command Execution
-* `execute_command(reasoning, command)`
-  * Purpose: Execute shell commands
-  * Common usage: `execute_command("Need line numbers for file modification", "cat -n filename")`
-
-### Task Management
-* `create_plan(reasoning, [steps])`
-  * Purpose: Create step-by-step execution plans
-  * Must include testing/validation steps where appropriate
-  * once you have an approved plan, no need to call `create_plan` again
 """
 
     if files_content:
