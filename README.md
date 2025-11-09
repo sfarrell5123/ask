@@ -100,9 +100,18 @@ ask "find security vulnerabilities in this config" app.conf
 ask "explain this function" utils.py
 ```
 
+### Web Research & Documentation (with Tavily)
+```bash
+ask "what are the latest features in OpenZFS 2.3?"
+ask "find best practices for PostgreSQL connection pooling"
+ask "search for solutions to Docker networking issues"
+ask "what's the current recommended way to handle CORS in FastAPI?"
+```
+
 ## Features
 
 - **System Operations**: Execute commands, manage files, configure services - actual work, not just suggestions
+- **Web Search & Research** (optional): Search the web and extract content from URLs with Tavily integration
 - **Security Auditing**: Scan for vulnerabilities, check permissions, review configurations
 - **Automated Workflows**: Create and schedule backup scripts, monitoring tasks, maintenance jobs
 - **Planning Mode**: For complex or destructive operations, shows plan before execution
@@ -157,7 +166,43 @@ ask "explain this function" utils.py
 
    **Note**: You can also set `OPENROUTER_API_KEY` as an environment variable instead of using a file.
 
-5. **Optional**: Make `ask` available system-wide:
+5. **Optional: Enable Web Search with Tavily**
+
+   For up-to-date information and web research capabilities, you can optionally add Tavily support:
+
+   ```bash
+   # Install the Tavily Python package
+   pip install tavily-python
+
+   # Add your Tavily API key to ~/.env
+   echo "TAVILY_API_KEY=your_tavily_api_key_here" >> ~/.env
+   ```
+
+   Get a free API key from [Tavily](https://tavily.com/)
+
+   **What Tavily enables:**
+   - `web_search` tool: Search the web for current information, documentation, and research
+   - `read_web_url` tool: Extract and read content from specific URLs
+
+   **Check your setup:**
+   ```bash
+   ./ask --help
+   # Look for the API Key Status section at the bottom
+   ```
+
+   You'll see either:
+   - `TAVILY_API_KEY: ✓ Available` (ready to use)
+   - `TAVILY_API_KEY: ✗ Package not installed (pip install tavily-python)` (install needed)
+   - `TAVILY_API_KEY: ✗ API key not found` (add key to ~/.env)
+
+   **Example with Tavily:**
+   ```bash
+   ask "what are the latest OpenZFS features in 2025?"
+   ask "find documentation for Python asyncio best practices"
+   ask "search for solutions to nginx 502 errors with uwsgi"
+   ```
+
+6. **Optional**: Make `ask` available system-wide:
 
    **On Linux:**
    ```bash
@@ -266,6 +311,8 @@ The tool uses [OpenRouter](https://openrouter.ai/) which provides access to mult
 - Python 3.11 or higher
 - OpenAI Python library (`pip install openai`)
 - OpenRouter API key (supports multiple model providers)
+- **Optional**: Tavily Python library (`pip install tavily-python`) for web search capabilities
+- **Optional**: Tavily API key for web search features
 
 ## History Management
 
@@ -325,6 +372,16 @@ ask "migrate this server from Apache to Nginx"
 - Create a `~/.env` file in your home directory with your API key
 - Or set it as an environment variable: `export OPENROUTER_API_KEY=your_key`
 - Get a key from [openrouter.ai](https://openrouter.ai/)
+
+**Check API key status**
+- Run `./ask --help` to see which API keys are configured
+- Look for the "API Key Status" section at the bottom of the help output
+
+**Web search not working**
+- Check if Tavily is installed: `pip list | grep tavily`
+- Install if needed: `pip install tavily-python`
+- Add your API key to `~/.env`: `echo "TAVILY_API_KEY=your_key" >> ~/.env`
+- Verify with `./ask --help` (should show "✓ Available")
 
 **"Permission denied"**
 - Make script executable: `chmod +x ./ask`

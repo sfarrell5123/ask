@@ -125,27 +125,57 @@ class HistoryManager:
                 if message["name"] == "execute_command":
                     command = content.get("command", "unknown")
                     stdout = content.get("stdout", "")
-                    details = f"Command: {command}\nOutput: {stdout[:200]}{'...' if len(stdout) > 200 else ''}"
+                    # Full stdout - no truncation
+                    details = f"Command: {command}\nOutput: {stdout}"
                 elif message["name"] == "write_to_file":
                     filename = content.get("filename", "unknown")
-                    content_preview = content.get("content", "")[:100] + (
-                        "..." if len(content.get("content", "")) > 100 else ""
-                    )
-                    details = f"File: {filename}\nContent: {content_preview}"
+                    file_content = content.get("content", "")
+                    # Full content - no truncation
+                    details = f"File: {filename}\nContent: {file_content}"
                 elif message["name"] in ["replace_line", "insert_before_line"]:
                     filename = content.get("filename", "unknown")
                     line = content.get("linenumber", 0)
-                    content_preview = content.get("content", "")[:100] + (
-                        "..." if len(content.get("content", "")) > 100 else ""
-                    )
-                    details = (
-                        f"File: {filename}\nLine: {line}\nContent: {content_preview}"
-                    )
+                    file_content = content.get("content", "")
+                    # Full content - no truncation
+                    details = f"File: {filename}\nLine: {line}\nContent: {file_content}"
                 elif message["name"] == "create_plan":
                     steps = content.get("steps", [])
                     details = f"Plan steps:\n" + "\n".join(
                         f"  {i+1}. {step}" for i, step in enumerate(steps)
                     )
+                elif message["name"] == "web_search":
+                    query = content.get("query", "")
+                    answer = content.get("answer", "")
+                    results = content.get("results", [])
+
+                    details = f"Query: {query}\n"
+                    if answer:
+                        # Full answer, no truncation
+                        details += f"Answer: {answer}\n"
+
+                    if results:
+                        # All results with title, URL, and content
+                        details += f"\nResults ({len(results)}):\n"
+                        for i, result in enumerate(results):
+                            title = result.get("title", "No title")
+                            url = result.get("url", "")
+                            snippet = result.get("content", "")
+                            details += f"{i+1}. {title}\n   URL: {url}\n   Content: {snippet}\n\n"
+                elif message["name"] == "read_web_url":
+                    results = content.get("results", [])
+                    failed = content.get("failed_results", [])
+
+                    details = ""
+                    if results:
+                        # Full content, no truncation
+                        details += f"Extracted {len(results)} URL(s):\n\n"
+                        for i, result in enumerate(results):
+                            url = result.get("url", "")
+                            raw_content = result.get("raw_content", "")
+                            details += f"{i+1}. URL: {url}\n   Content:\n{raw_content}\n\n"
+
+                    if failed:
+                        details += f"\nFailed to extract: {', '.join(failed)}\n"
 
                 return {
                     "role": "assistant",
@@ -269,14 +299,9 @@ def get_file_content(filepath: str) -> tuple[str, bool]:
         if not path.exists():
             return None, False
 
-        size = path.stat().st_size
-        if size > 4096:  # 4KB threshold
-            with open(filepath, "r") as f:
-                content = "".join(f.readlines()[:100])  # First 100 lines
-            return content, True
-        else:
-            with open(filepath, "r") as f:
-                return f.read(), False
+        # Read full file content regardless of size
+        with open(filepath, "r") as f:
+            return f.read(), False
     except Exception:
         return None, False
 
@@ -1050,14 +1075,10 @@ def execute_command(*, reasoning: str = "", command: str, params: List[str] = No
             first_line = result.stdout.splitlines()[0]
             print(f"\033[96m<output>\033[0m {first_line}")
 
-        # Truncate stdout if too long
-        stdout = result.stdout
-        if stdout and len(stdout) > 1000:
-            stdout = stdout[:1000] + "\n...truncated too long"
-
+        # Return full stdout - no truncation
         return {
             "status": "success",
-            "stdout": stdout,
+            "stdout": result.stdout,
             "stderr": result.stderr,
             "returncode": result.returncode,
         }
@@ -1428,6 +1449,26 @@ def main():
     env_vars = read_env_file()
     os.environ.update(env_vars)
 
+    # Debug environment variables if requested
+    if "--debug-env" in sys.argv:
+        print("=== Environment Debug ===")
+        print(f"~/.env path: {os.path.expanduser('~/.env')}")
+        print(f"~/.env exists: {os.path.exists(os.path.expanduser('~/.env'))}")
+        print(f"\nVariables loaded from ~/.env:")
+        for key in sorted(env_vars.keys()):
+            if "KEY" in key or "API" in key:
+                value = env_vars[key]
+                masked = value[:8] + "..." if len(value) > 8 else value
+                print(f"  {key} = {masked} (len={len(value)})")
+        print(f"\nTAVILY_API_KEY in env_vars: {'TAVILY_API_KEY' in env_vars}")
+        print(f"TAVILY_API_KEY in os.environ: {'TAVILY_API_KEY' in os.environ}")
+        print(f"TAVILY_AVAILABLE: {TAVILY_AVAILABLE}")
+        if 'TAVILY_API_KEY' in os.environ:
+            val = os.environ['TAVILY_API_KEY']
+            print(f"TAVILY_API_KEY value: {val[:8]}... (len={len(val)})")
+        print("=" * 40)
+        sys.exit(0)
+
     if len(sys.argv) < 2:
         print("Usage: ask <question> [file1] [file2] ...")
         sys.exit(1)
@@ -1464,7 +1505,14 @@ def main():
     # Initialize argument parser
     # Build API key status for help text (match actual runtime checks)
     openrouter_status = "✓ Available" if "OPENROUTER_API_KEY" in os.environ else "✗ Not found"
-    tavily_status = "✓ Available" if (TAVILY_AVAILABLE and os.environ.get("TAVILY_API_KEY")) else "✗ Not found"
+
+    # More detailed Tavily status
+    if TAVILY_AVAILABLE and os.environ.get("TAVILY_API_KEY"):
+        tavily_status = "✓ Available"
+    elif not TAVILY_AVAILABLE:
+        tavily_status = "✗ Package not installed (pip install tavily-python)"
+    else:
+        tavily_status = "✗ API key not found"
 
     epilog_text = f"""
 API Key Status:
