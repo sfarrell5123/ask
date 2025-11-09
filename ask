@@ -15,6 +15,12 @@ import time
 from openai import OpenAI
 import traceback
 
+# Optional Tavily import
+try:
+    from tavily import TavilyClient
+    TAVILY_AVAILABLE = True
+except ImportError:
+    TAVILY_AVAILABLE = False
 
 json_decoder = json.JSONDecoder()
 
@@ -444,6 +450,54 @@ def call_llm(messages: List[Dict], model=None) -> str:
         },
     ]
 
+    # Add Tavily tools if API key is available
+    if TAVILY_AVAILABLE and os.environ.get("TAVILY_API_KEY"):
+        tools.extend([
+            {
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "Search the web for current information using Tavily. Use when you need up-to-date information, documentation, or to research topics. Returns an answer summary plus detailed search results.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "reasoning": {
+                                "type": "string",
+                                "description": "Explanation of why this search is needed",
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "The search query to execute",
+                            },
+                        },
+                        "required": ["reasoning", "query"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_web_url",
+                    "description": "Extract and read content from specific web URLs using Tavily. Use when you have exact URLs to read (from search results or user-provided). Returns the full text content from the pages.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "reasoning": {
+                                "type": "string",
+                                "description": "Explanation of why these URLs need to be read",
+                            },
+                            "urls": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of URLs to extract content from",
+                            },
+                        },
+                        "required": ["reasoning", "urls"],
+                    },
+                },
+            },
+        ])
+
     # Model selection logic
     selected_model = model or "openai/gpt-5-mini"
 
@@ -562,6 +616,12 @@ def call_llm(messages: List[Dict], model=None) -> str:
                     # Show feedback before executing
                     print(format_tool_feedback("execute_command", function_args))
                     result = execute_command(**function_args)
+                elif function_name == "web_search":
+                    print(format_tool_feedback("web_search", function_args))
+                    result = web_search(**function_args)
+                elif function_name == "read_web_url":
+                    print(format_tool_feedback("read_web_url", function_args))
+                    result = read_web_url(**function_args)
                 else:
                     result = {"status": "error", "message": "Unknown function"}
 
@@ -916,6 +976,15 @@ def format_tool_feedback(tool_name: str, params: Dict) -> str:
         command = params.get("command", "")
         params_list = params.get("params", [])
         param_summary = f"{command} {' '.join(params_list)}"
+    elif tool_name == "web_search":
+        query = params.get("query", "")
+        param_summary = f"'{query}'"
+    elif tool_name == "read_web_url":
+        urls = params.get("urls", [])
+        if isinstance(urls, list) and urls:
+            param_summary = f"{urls[0]}" + (f" +{len(urls)-1} more" if len(urls) > 1 else "")
+        else:
+            param_summary = str(urls)
 
     # Format with bright green highlight
     return f"\033[92m<{tool_name}>\033[0m {param_summary}"
@@ -991,6 +1060,64 @@ def execute_command(*, reasoning: str = "", command: str, params: List[str] = No
             "stdout": stdout,
             "stderr": result.stderr,
             "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def web_search(*, reasoning: str = "", query: str) -> Dict:
+    """Search the web using Tavily API"""
+    if not TAVILY_AVAILABLE:
+        return {"status": "error", "message": "Tavily not available - install tavily-python"}
+
+    try:
+        api_key = os.environ.get("TAVILY_API_KEY")
+        if not api_key:
+            return {"status": "error", "message": "TAVILY_API_KEY not found in environment"}
+
+        client = TavilyClient(api_key)
+        response = client.search(
+            query=query,
+            include_answer="basic",
+            search_depth="advanced"
+        )
+
+        # Print answer if available
+        if response.get("answer"):
+            print(f"\033[96m<answer>\033[0m {response['answer'][:100]}...")
+
+        return {
+            "status": "success",
+            "answer": response.get("answer", ""),
+            "results": response.get("results", []),
+            "query": response.get("query", query)
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def read_web_url(*, reasoning: str = "", urls: List[str]) -> Dict:
+    """Extract content from web URLs using Tavily API"""
+    if not TAVILY_AVAILABLE:
+        return {"status": "error", "message": "Tavily not available - install tavily-python"}
+
+    try:
+        api_key = os.environ.get("TAVILY_API_KEY")
+        if not api_key:
+            return {"status": "error", "message": "TAVILY_API_KEY not found in environment"}
+
+        client = TavilyClient(api_key)
+        response = client.extract(urls=urls)
+
+        # Print first URL extracted
+        if response.get("results") and len(response["results"]) > 0:
+            first_url = response["results"][0].get("url", "")
+            print(f"\033[96m<extracted>\033[0m {first_url}")
+
+        return {
+            "status": "success",
+            "results": response.get("results", []),
+            "failed_results": response.get("failed_results", [])
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
