@@ -122,12 +122,14 @@ Conversation history means you can iterate naturally, building on previous comma
    pip3 install openai
    ```
 
-4. Create a `.env` file with your API key:
+4. Create a `.env` file in your home directory with your API key:
    ```bash
-   echo "OPENROUTER_API_KEY=your_api_key_here" > .env
+   echo "OPENROUTER_API_KEY=your_api_key_here" > ~/.env
    ```
 
    Get an API key from [OpenRouter](https://openrouter.ai/)
+
+   **Note**: You can also set `OPENROUTER_API_KEY` as an environment variable instead of using a file.
 
 ## Usage
 
@@ -188,10 +190,16 @@ All responses are stored in `~/.cache/ask/history.json` so follow-up commands wo
 
 ## Configuration
 
-Create a `.env` file in the same directory as the script:
+Create a `.env` file in your home directory:
 
 ```bash
+# ~/.env
 OPENROUTER_API_KEY=your_openrouter_api_key_here
+```
+
+Alternatively, set the API key as an environment variable:
+```bash
+export OPENROUTER_API_KEY=your_openrouter_api_key_here
 ```
 
 The tool uses [OpenRouter](https://openrouter.ai/) which provides access to multiple AI models through a single API.
@@ -264,7 +272,8 @@ For complex operations, let the assistant plan before executing:
 ## Troubleshooting
 
 **"OPENROUTER_API_KEY not found"**
-- Create a `.env` file with your API key
+- Create a `~/.env` file in your home directory with your API key
+- Or set it as an environment variable: `export OPENROUTER_API_KEY=your_key`
 - Get a key from [openrouter.ai](https://openrouter.ai/)
 
 **"Permission denied"**
