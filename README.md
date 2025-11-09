@@ -4,6 +4,8 @@ Stop context-switching. Stop googling command syntax. Just **ask**.
 
 `ask` is a terminal-based AI assistant that can **do things** - not just answer questions. It executes commands, edits files, and handles everything from simple one-liners to complex multi-step operations. And for destructive tasks? It plans first, so you stay in control.
 
+`ask` is an **AI agent** for your terminal that **plans and does**. It understands what you want, creates a plan, and executes it. Complex operations? It breaks them down into steps. System changes? It verifies everything. You describe the goal, and the agent handles the rest.
+
 ## Why This Tool?
 
 ### Simple Things, Instantly
