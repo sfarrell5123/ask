@@ -61,193 +61,26 @@ class HistoryManager:
         self.cache_dir = Path(os.path.expanduser("~/.cache/ask"))
         self.history_file = self.cache_dir / "history.json"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.current_thread = []
-
-    def append_message_simple(self, actor, content) -> None:
-        """Append a simple message to current thread and history"""
-        message = {"role": actor, "content": content}
-        self.append_message(message)
-
-    def _paraphrase_message(self, message) -> Dict:
-        """Convert tool-related messages into detailed conversational format"""
-        # print("history:_paraphrase_message", message, "type:", type(message))
-        if not message:
-            # print("history:empty_message")
-            print(message)
-            return None
-
-        # Handle regular user/assistant messages
-        if (
-            type(message) == dict
-            and message.get("role") in ["user", "assistant"]
-            and message.get("content")
-        ):
-            # print("history:regular_message")
-            return message
-
-        # Handle tool calls from assistant
-        if hasattr(message, "tool_calls"):
-
-            detailed_calls = []
-            for tc in message.tool_calls:
-                try:
-                    args = parse_tool_call_arguments(tc.function.arguments)
-                    if tc.function.name == "execute_command":
-                        detailed_calls.append(
-                            f"Executed command: {args.get('command', '')} {args.get('params', [])}"
-                        )
-                    elif tc.function.name == "create_plan":
-                        steps = args.get("steps", [])
-                        detailed_calls.append(
-                            f"Created plan with {len(steps)} steps:\n"
-                            + "\n".join(
-                                f"  {i+1}. {step}" for i, step in enumerate(steps)
-                            )
-                        )
-                    else:
-                        detailed_calls.append(
-                            f"Requested {tc.function.name} with args: {args}"
-                        )
-                except Exception:
-                    detailed_calls.append(f"Requested {tc.function.name}")
-
-            return {"role": "assistant", "content": "\n".join(detailed_calls)}
-
-        # Handle tool responses
-        if message.get("role") == "tool":
-            # print("history:tool_response")
-
-            try:
-                content = json.loads(message.get("content", "{}"))
-                status = content.get("status", "executed")
-                details = ""
-
-                if message["name"] == "execute_command":
-                    command = content.get("command", "unknown")
-                    stdout = content.get("stdout", "")
-                    # Full stdout - no truncation
-                    details = f"Command: {command}\nOutput: {stdout}"
-                elif message["name"] == "write_to_file":
-                    filename = content.get("filename", "unknown")
-                    file_content = content.get("content", "")
-                    # Full content - no truncation
-                    details = f"File: {filename}\nContent: {file_content}"
-                elif message["name"] in ["replace_line", "insert_before_line"]:
-                    filename = content.get("filename", "unknown")
-                    line = content.get("linenumber", 0)
-                    file_content = content.get("content", "")
-                    # Full content - no truncation
-                    details = f"File: {filename}\nLine: {line}\nContent: {file_content}"
-                elif message["name"] == "create_plan":
-                    steps = content.get("steps", [])
-                    details = f"Plan steps:\n" + "\n".join(
-                        f"  {i+1}. {step}" for i, step in enumerate(steps)
-                    )
-                elif message["name"] == "web_search":
-                    query = content.get("query", "")
-                    answer = content.get("answer", "")
-                    results = content.get("results", [])
-
-                    details = f"Query: {query}\n"
-                    if answer:
-                        # Full answer, no truncation
-                        details += f"Answer: {answer}\n"
-
-                    if results:
-                        # All results with title, URL, and content
-                        details += f"\nResults ({len(results)}):\n"
-                        for i, result in enumerate(results):
-                            title = result.get("title", "No title")
-                            url = result.get("url", "")
-                            snippet = result.get("content", "")
-                            details += f"{i+1}. {title}\n   URL: {url}\n   Content: {snippet}\n\n"
-                elif message["name"] == "read_web_url":
-                    results = content.get("results", [])
-                    failed = content.get("failed_results", [])
-
-                    details = ""
-                    if results:
-                        # Full content, no truncation
-                        details += f"Extracted {len(results)} URL(s):\n\n"
-                        for i, result in enumerate(results):
-                            url = result.get("url", "")
-                            raw_content = result.get("raw_content", "")
-                            details += f"{i+1}. URL: {url}\n   Content:\n{raw_content}\n\n"
-
-                    if failed:
-                        details += f"\nFailed to extract: {', '.join(failed)}\n"
-
-                return {
-                    "role": "assistant",
-                    "content": f"Tool {message['name']} result (status: {status}):\n{details}",
-                }
-            except Exception as e:
-                print("history:error")
-
-                return {
-                    "role": "assistant",
-                    "content": f"Tool {message['name']} result (error: {str(e)})",
-                }
-
-        print("history:_paraphrase_message: unknown_message")
-        print(message)
-        return None
 
     def append_message(self, message: Dict) -> None:
-        """Append a single message to current thread and history"""
-        # print("history:append_message", message)
+        """Append a single message to history in native OpenAI format"""
         if not message:
-            print("history:empty_message")
-            return
-
-        # Paraphrase the message before storing
-        paraphrased = self._paraphrase_message(message)
-        # print("history: returned from _paraphrase_message", paraphrased)
-        if paraphrased:
-            self.current_thread.append(paraphrased)
-            self._save_current_thread()
-
-    def finalize_thread(self) -> None:
-        """Save current thread to history and clear it"""
-        if self.current_thread:
-            self._save_current_thread()
-            self.current_thread = []
-
-    def _save_current_thread(self) -> None:
-        """Save current thread to history"""
-        if not self.current_thread:
             return
 
         history = self._load_history()
-
-        thread = {
-            "timestamp": datetime.now().isoformat(),
-            "messages": self.current_thread.copy(),
-        }
-
-        history.append(thread)
-        # history = history[-10:]  # Keep only last 10 threads
+        history.append(message)
         self._save_history(history)
 
-    def get_recent_messages(self, max_age_hours: int = 24) -> List[Dict]:
-        """Get recent messages from history within specified age"""
-        history = self._load_history()
+    def get_all_messages(self) -> List[Dict]:
+        """Get all messages from history"""
+        return self._load_history()
 
-        recent_messages = []
-        cutoff = datetime.now().timestamp() - (max_age_hours * 3600)
-
-        for thread in history:
-            try:
-                thread_time = datetime.fromisoformat(thread["timestamp"]).timestamp()
-                if thread_time >= cutoff:
-                    recent_messages.extend(thread["messages"])
-            except (KeyError, ValueError):
-                continue
-
-        return recent_messages
+    def clear_history(self) -> None:
+        """Clear all history"""
+        self.history_file.unlink(missing_ok=True)
 
     def _load_history(self) -> List[Dict]:
-        """Load history from disk"""
+        """Load history from disk - returns array of messages in OpenAI format"""
         if not self.history_file.exists():
             return []
 
@@ -258,7 +91,7 @@ class HistoryManager:
             return []
 
     def _save_history(self, history: List[Dict]) -> None:
-        """Save history to disk"""
+        """Save history to disk - saves array of messages"""
         try:
             with open(self.history_file, "w") as f:
                 json.dump(history, f, indent=2)
@@ -592,25 +425,15 @@ def call_llm(messages: List[Dict], model=None) -> str:
         tool_calls = response_message.tool_calls
 
         if tool_calls:
-            # First append the assistant message with tool calls
-            tool_message = {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": tool_calls,
-            }
-            messages.append(tool_message)
+            # Store the assistant message with tool calls using model_dump()
+            assistant_msg = response_message.model_dump()
+            messages.append(assistant_msg)
+            history_manager.append_message(assistant_msg)
 
             # Then process each tool call and append responses
             for tool_call in tool_calls:
                 function_name = tool_call.function.name
                 function_args = parse_tool_call_arguments(tool_call.function.arguments)
-                function_args_joined = ", ".join(
-                    f"{k}={v}" for k, v in function_args.items()
-                )
-                history_manager.append_message_simple(
-                    "assistant",
-                    "tool_calls : " + function_name + " : " + function_args_joined,
-                )
 
                 if function_name == "create_plan":
                     print(format_tool_feedback("create_plan", function_args))
@@ -658,11 +481,10 @@ def call_llm(messages: List[Dict], model=None) -> str:
                     "content": json.dumps(result),
                 }
                 messages.append(tool_response)
-
-            # For non-plan tools, get final response after execution
-            if function_name != "create_plan":
                 history_manager.append_message(tool_response)
-                return call_llm(messages=messages, model=selected_model)
+
+            # After all tool calls processed, get final response
+            return call_llm(messages=messages, model=selected_model)
 
         # DeepSeek v3 sometimes returns JSON‑formatted tool calls in plain text.
         # Detect a ```json``` block, execute any tool_calls_requested, then recurse.
@@ -1292,17 +1114,15 @@ def format_messages_for_summary(messages: List[Dict]) -> str:
         if role == "user":
             lines.append(f"user: {content}")
         elif role == "assistant":
-            # Check if this is a tool call description or regular response
-            if content.startswith("Requested ") or content.startswith("Executed "):
-                # This is a paraphrased tool call
-                lines.append(f"assistant: [tool call: {content}]")
-            elif content.startswith("Tool ") and " result " in content:
-                # This is a paraphrased tool result
-                lines.append(f"tool: [result: {content}]")
+            # Handle tool calls
+            if msg.get("tool_calls"):
+                tool_names = [tc.get("function", {}).get("name", "unknown") for tc in msg["tool_calls"]]
+                lines.append(f"assistant: [tool calls: {', '.join(tool_names)}]")
             else:
                 lines.append(f"assistant: {content}")
         elif role == "tool":
-            lines.append(f"tool: {content}")
+            name = msg.get("name", "unknown")
+            lines.append(f"tool ({name}): {content[:100]}...")  # Truncate tool output
 
     return "\n".join(lines)
 
@@ -1313,7 +1133,10 @@ def summarize_conversation(conversation_text: str) -> str:
 
 Paraphrase/summarize each message as text chunks.
 
-IMPORTANT: keep the turn by turn chat/tool format, but Paraphrase/summarize the content of each turn
+IMPORTANT: 
+- keep the turn by turn chat/tool format, but Paraphrase/summarize the content of each turn
+- do not truncate - summarize or paraphrase instead
+- allow up to 300 characters per turn
 
 Convert the conversation into concise format using these exact labels:
 - user: [user message]
@@ -1321,7 +1144,7 @@ Convert the conversation into concise format using these exact labels:
 - assistant: [tool call: function_name brief_args]
 - tool: [result: brief_output]
 
-Keep each entry to ~100-300 characters. Preserve key context and outcomes. Paraphrase/summarize content while maintaining important information.
+Keep each entry to ~100-300 characters per turn. Preserve key context and outcomes. Paraphrase/summarize content while maintaining important information.
 
 Format output as plain text with the structure above. Do not add any explanations or meta-commentary."""
 
@@ -1349,11 +1172,7 @@ Format output as plain text with the structure above. Do not add any explanation
 def compact_history() -> str:
     """Load all history, summarize it compactly, save as single entry"""
     # Load all history
-    all_messages = []
-    history = history_manager._load_history()
-
-    for thread in history:
-        all_messages.extend(thread.get("messages", []))
+    all_messages = history_manager.get_all_messages()
 
     if not all_messages:
         return "No history to compact."
@@ -1362,16 +1181,12 @@ def compact_history() -> str:
     conversation_text = format_messages_for_summary(all_messages)
 
     # Call fast LLM to summarize
-    print(f"Compacting {len(all_messages)} messages from {len(history)} threads...")
+    print(f"Compacting {len(all_messages)} messages...")
     summary = summarize_conversation(conversation_text)
 
-    # Clear history and save single compact entry
-    history_manager.history_file.unlink(missing_ok=True)
-    compact_thread = {
-        "timestamp": datetime.now().isoformat(),
-        "messages": [{"role": "assistant", "content": summary}]
-    }
-    history_manager._save_history([compact_thread])
+    # Clear history and save single compact summary message
+    history_manager.clear_history()
+    history_manager.append_message({"role": "assistant", "content": f"[Compact summary of previous conversation]\n{summary}"})
 
     return summary
 
@@ -1387,11 +1202,7 @@ def show_history_summary() -> None:
             print()
 
     # Load all history
-    all_messages = []
-    history = history_manager._load_history()
-
-    for thread in history:
-        all_messages.extend(thread.get("messages", []))
+    all_messages = history_manager.get_all_messages()
 
     if not all_messages:
         print("No history to summarize.")
@@ -1399,7 +1210,7 @@ def show_history_summary() -> None:
 
     # Build conversation text and summarize (reuse existing functions)
     conversation_text = format_messages_for_summary(all_messages)
-    print(f"Summarizing {len(all_messages)} messages from {len(history)} threads...")
+    print(f"Summarizing {len(all_messages)} messages...")
     summary = summarize_conversation(conversation_text)
 
     # Display summary
@@ -1475,7 +1286,7 @@ def main():
 
     # Check for clear history flag
     if "--clear" in sys.argv:
-        history_manager.history_file.unlink(missing_ok=True)  # Delete history file
+        history_manager.clear_history()
         print("History cleared.")
         sys.argv.remove("--clear")  # Remove the flag from arguments
         sys.exit(0)  # Exit after clearing history
@@ -1546,7 +1357,7 @@ API Key Status:
 
     # Handle clear history flag
     if args.clear:
-        history_manager.history_file.unlink(missing_ok=True)
+        history_manager.clear_history()
         print("History cleared.")
         sys.exit(0)
 
@@ -1672,18 +1483,15 @@ Shell: {os.environ.get("SHELL", "unknown")}
 
     # Prepare messages with history
     messages = []
-    # history_manager.append_message({"role": "system", "content": system_prompt})
     messages.append({"role": "system", "content": system_prompt})
 
-    # Add recent history
-    recent_messages = history_manager.get_recent_messages()
-    messages.extend(recent_messages)
+    # Add all history
+    history = history_manager.get_all_messages()
+    messages.extend(history)
 
     # Add current question
     user_message = {"role": "user", "content": question_str}
-    # print("appending user message: ", user_message)
     history_manager.append_message(user_message)
-
     messages.append(user_message)
 
     # print("kicking off with:", messages)
@@ -1708,8 +1516,7 @@ Shell: {os.environ.get("SHELL", "unknown")}
         )
         print(answer)
         if answer:
-            history_manager.append_message_simple("assistant", answer)
-        history_manager.finalize_thread()
+            history_manager.append_message({"role": "assistant", "content": answer})
     except Exception as e:
         print(f"Error: Failed to get response: {str(e)}", file=sys.stderr)
         sys.exit(1)
