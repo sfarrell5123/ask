@@ -1,0 +1,1400 @@
+#!/usr/bin/env python3.11
+
+import os
+import sys
+import json
+from pathlib import Path
+from typing import List, Dict, Optional
+import platform
+from datetime import datetime
+import re
+import ast
+import argparse
+import io
+
+import os
+import json
+from pathlib import Path
+from datetime import datetime
+from typing import List, Dict
+from openai import OpenAI
+import traceback
+
+
+json_decoder = json.JSONDecoder()
+
+
+def parse_tool_call_arguments(raw: Optional[str]) -> Dict:
+    """Best-effort parser for tool call arguments that may contain extra text."""
+    if not raw:
+        return {}
+
+    cleaned = raw.strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    try:
+        obj, _ = json_decoder.raw_decode(cleaned)
+        return obj
+    except json.JSONDecodeError:
+        pass
+
+    first_brace = cleaned.find("{")
+    if first_brace not in (-1, 0):
+        try:
+            obj, _ = json_decoder.raw_decode(cleaned[first_brace:])
+            return obj
+        except json.JSONDecodeError:
+            pass
+
+    preview = cleaned[:200].replace("\n", " ")
+    print(f"Warning: failed to parse tool call arguments: {preview}...", file=sys.stderr)
+    return {}
+
+
+class HistoryManager:
+    def __init__(self):
+        self.cache_dir = Path(os.path.expanduser("~/.cache/ask"))
+        self.history_file = self.cache_dir / "history.json"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.current_thread = []
+
+    def append_message_simple(self, actor, content) -> None:
+        """Append a simple message to current thread and history"""
+        message = {"role": actor, "content": content}
+        self.append_message(message)
+
+    def _paraphrase_message(self, message) -> Dict:
+        """Convert tool-related messages into detailed conversational format"""
+        # print("history:_paraphrase_message", message, "type:", type(message))
+        if not message:
+            # print("history:empty_message")
+            print(message)
+            return None
+
+        # Handle regular user/assistant messages
+        if (
+            type(message) == dict
+            and message.get("role") in ["user", "assistant"]
+            and message.get("content")
+        ):
+            # print("history:regular_message")
+            return message
+
+        # Handle tool calls from assistant
+        if hasattr(message, "tool_calls"):
+
+            detailed_calls = []
+            for tc in message.tool_calls:
+                try:
+                    args = parse_tool_call_arguments(tc.function.arguments)
+                    if tc.function.name == "execute_command":
+                        detailed_calls.append(
+                            f"Executed command: {args.get('command', '')} {args.get('params', [])}"
+                        )
+                    elif tc.function.name == "create_plan":
+                        steps = args.get("steps", [])
+                        detailed_calls.append(
+                            f"Created plan with {len(steps)} steps:\n"
+                            + "\n".join(
+                                f"  {i+1}. {step}" for i, step in enumerate(steps)
+                            )
+                        )
+                    else:
+                        detailed_calls.append(
+                            f"Requested {tc.function.name} with args: {args}"
+                        )
+                except Exception:
+                    detailed_calls.append(f"Requested {tc.function.name}")
+
+            return {"role": "assistant", "content": "\n".join(detailed_calls)}
+
+        # Handle tool responses
+        if message.get("role") == "tool":
+            # print("history:tool_response")
+
+            try:
+                content = json.loads(message.get("content", "{}"))
+                status = content.get("status", "executed")
+                details = ""
+
+                if message["name"] == "execute_command":
+                    command = content.get("command", "unknown")
+                    stdout = content.get("stdout", "")
+                    details = f"Command: {command}\nOutput: {stdout[:200]}{'...' if len(stdout) > 200 else ''}"
+                elif message["name"] == "write_to_file":
+                    filename = content.get("filename", "unknown")
+                    content_preview = content.get("content", "")[:100] + (
+                        "..." if len(content.get("content", "")) > 100 else ""
+                    )
+                    details = f"File: {filename}\nContent: {content_preview}"
+                elif message["name"] in ["replace_line", "insert_before_line"]:
+                    filename = content.get("filename", "unknown")
+                    line = content.get("linenumber", 0)
+                    content_preview = content.get("content", "")[:100] + (
+                        "..." if len(content.get("content", "")) > 100 else ""
+                    )
+                    details = (
+                        f"File: {filename}\nLine: {line}\nContent: {content_preview}"
+                    )
+                elif message["name"] == "create_plan":
+                    steps = content.get("steps", [])
+                    details = f"Plan steps:\n" + "\n".join(
+                        f"  {i+1}. {step}" for i, step in enumerate(steps)
+                    )
+
+                return {
+                    "role": "assistant",
+                    "content": f"Tool {message['name']} result (status: {status}):\n{details}",
+                }
+            except Exception as e:
+                print("history:error")
+
+                return {
+                    "role": "assistant",
+                    "content": f"Tool {message['name']} result (error: {str(e)})",
+                }
+
+        print("history:_paraphrase_message: unknown_message")
+        print(message)
+        return None
+
+    def append_message(self, message: Dict) -> None:
+        """Append a single message to current thread and history"""
+        # print("history:append_message", message)
+        if not message:
+            print("history:empty_message")
+            return
+
+        # Paraphrase the message before storing
+        paraphrased = self._paraphrase_message(message)
+        # print("history: returned from _paraphrase_message", paraphrased)
+        if paraphrased:
+            self.current_thread.append(paraphrased)
+            self._save_current_thread()
+
+    def finalize_thread(self) -> None:
+        """Save current thread to history and clear it"""
+        if self.current_thread:
+            self._save_current_thread()
+            self.current_thread = []
+
+    def _save_current_thread(self) -> None:
+        """Save current thread to history"""
+        if not self.current_thread:
+            return
+
+        history = self._load_history()
+
+        thread = {
+            "timestamp": datetime.now().isoformat(),
+            "messages": self.current_thread.copy(),
+        }
+
+        history.append(thread)
+        # history = history[-10:]  # Keep only last 10 threads
+        self._save_history(history)
+
+    def get_recent_messages(self, max_age_hours: int = 24) -> List[Dict]:
+        """Get recent messages from history within specified age"""
+        history = self._load_history()
+
+        recent_messages = []
+        cutoff = datetime.now().timestamp() - (max_age_hours * 3600)
+
+        for thread in history:
+            try:
+                thread_time = datetime.fromisoformat(thread["timestamp"]).timestamp()
+                if thread_time >= cutoff:
+                    recent_messages.extend(thread["messages"])
+            except (KeyError, ValueError):
+                continue
+
+        return recent_messages
+
+    def _load_history(self) -> List[Dict]:
+        """Load history from disk"""
+        if not self.history_file.exists():
+            return []
+
+        try:
+            with open(self.history_file) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return []
+
+    def _save_history(self, history: List[Dict]) -> None:
+        """Save history to disk"""
+        try:
+            with open(self.history_file, "w") as f:
+                json.dump(history, f, indent=2)
+        except IOError:
+            pass
+
+
+# Singleton instance for easy access
+history_manager = HistoryManager()
+
+
+def read_env_file() -> Dict[str, str]:
+    env_path = os.path.expanduser("~/.env")
+    env_vars = {}
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    key, value = line.split("=", 1)
+                    env_vars[key.strip()] = value.strip().strip("\"'")
+
+    # Set defaults if not present
+    if "GROQ_SMART_MODEL" not in env_vars:
+        env_vars["GROQ_SMART_MODEL"] = "llama-3.3-70b-versatile"
+    if "GROQ_FAST_MODEL" not in env_vars:
+        env_vars["GROQ_FAST_MODEL"] = "llama-3.1-8b-instant"
+    if "USE_DEEPSEEK_FOR_SMART" not in env_vars:
+        env_vars["USE_DEEPSEEK_FOR_SMART"] = "true"
+
+    return env_vars
+
+
+def get_file_content(filepath: str) -> tuple[str, bool]:
+    """Returns file content and whether it was truncated"""
+    try:
+        path = Path(filepath)
+        if not path.exists():
+            return None, False
+
+        size = path.stat().st_size
+        if size > 4096:  # 4KB threshold
+            with open(filepath, "r") as f:
+                content = "".join(f.readlines()[:100])  # First 100 lines
+            return content, True
+        else:
+            with open(filepath, "r") as f:
+                return f.read(), False
+    except Exception:
+        return None, False
+
+
+def extract_json(response: str) -> Optional[Dict]:
+    """Extract JSON from markdown code block if present"""
+
+    if "</think>" in response:
+        response = response.split("</think>", 1)[1].strip()
+    if "</thinking>" in response:
+        response = response.split("</thinking>", 1)[1].strip()
+
+    try:
+        response = response.replace("```tool_calls", "```json")
+        match = re.search(r"```json\n(.*?)\n```", response, re.DOTALL)
+        if match:
+            return json.loads(match.group(1).strip())
+    except json.JSONDecodeError:
+        # Look for code block
+        match = re.search(r"```json\n(.*?)\n```", response, re.DOTALL)
+        if match:
+            return json.loads(match.group(1).strip())
+        return None
+
+
+def call_llm(messages: List[Dict], model=None) -> str:
+    """Unified function to call LLM with function calling via OpenRouter"""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_plan",
+                "description": "Create a step-by-step plan for complex tasks",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this plan is needed",
+                        },
+                        "steps": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "The steps to execute the plan",
+                        },
+                    },
+                    "required": ["reasoning", "steps"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_to_file",
+                "description": "Write content to a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this action is needed",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "The path to the file to write",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The content to write to the file",
+                        },
+                    },
+                    "required": ["reasoning", "filename", "content"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_command",
+                "description": "Execute a shell command",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this command is needed",
+                        },
+                        "command": {
+                            "type": "string",
+                            "description": "The shell command to execute",
+                        },
+                        "params": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional parameters for the command",
+                        },
+                    },
+                    "required": ["reasoning", "command"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "replace_line",
+                "description": "Replace a specific line in a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this line needs to be replaced",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "The path to the file to modify",
+                        },
+                        "linenumber": {
+                            "type": "integer",
+                            "description": "The line number to replace (1-based)",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The new content for the line",
+                        },
+                    },
+                    "required": ["reasoning", "filename", "linenumber", "content"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "insert_before_line",
+                "description": "Insert content before a specific line in a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Explanation of why this insertion is needed",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "The path to the file to modify",
+                        },
+                        "linenumber": {
+                            "type": "integer",
+                            "description": "The line number to insert before (1-based)",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The content to insert",
+                        },
+                    },
+                    "required": ["reasoning", "filename", "linenumber", "content"],
+                },
+            },
+        },
+    ]
+
+    # Model selection logic
+    selected_model = model or "openai/gpt-5-mini"
+
+    # Create OpenRouter client
+    openrouter_client = OpenAI(
+        api_key=os.environ["OPENROUTER_API_KEY"],
+        base_url="https://openrouter.ai/api/v1",
+    )
+
+    # Optional OpenRouter provider routing for DeepSeek v3
+    extra_body_params = {}
+    if "deepseek" in selected_model.lower() and "v3" in selected_model.lower():
+        provider_config = {"provider": {"order": ["DeepSeek", "DeepInfra"]}}
+        extra_body_params.update(provider_config)
+
+    try:
+        response = openrouter_client.chat.completions.create(
+                extra_headers={
+                    "HTTP-Referer": "https://ask.com",  # Optional: site URL
+                    "X-Title": "ask",                   # Optional: app name
+                },
+                model=selected_model,
+                messages=messages,
+                temperature=0,
+                max_tokens=4096,
+                tools=tools,
+                tool_choice="auto",
+                extra_body=extra_body_params if extra_body_params else None,
+            )
+
+        # Gracefully handle an empty assistant reply
+        if response.usage.completion_tokens == 0:
+            return ""
+
+        # print(response)
+        response_message = response.choices[0].message
+        tool_calls = response_message.tool_calls
+
+        if tool_calls:
+            # First append the assistant message with tool calls
+            tool_message = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": tool_calls,
+            }
+            messages.append(tool_message)
+
+            # Then process each tool call and append responses
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                function_args = parse_tool_call_arguments(tool_call.function.arguments)
+                function_args_joined = ", ".join(
+                    f"{k}={v}" for k, v in function_args.items()
+                )
+                history_manager.append_message_simple(
+                    "assistant",
+                    "tool_calls : " + function_name + " : " + function_args_joined,
+                )
+
+                if function_name == "create_plan":
+                    print(format_tool_feedback("create_plan", function_args))
+                    result = create_plan(**function_args)
+                    # Add the plan steps to messages for follow-up
+                    # newMessage = {
+                    #     "role": "tool",
+                    #     "tool_call_id": tool_call.id,
+                    #     "name": function_name,
+                    #     "content": json.dumps(result),
+                    # }
+                    # messages.append(newMessage)
+                    # Return early to allow operator review
+                    # return (
+                    #     "Plan created. Please review and provide feedback to proceed."
+                    # )
+                elif function_name == "write_to_file":
+                    # Show feedback before executing
+                    print(format_tool_feedback("write_to_file", function_args))
+                    result = write_to_file(**function_args)
+                elif function_name == "replace_line":
+                    print(format_tool_feedback("replace_line", function_args))
+                    result = replace_line(**function_args)
+                elif function_name == "insert_before_line":
+                    print(format_tool_feedback("insert_before_line", function_args))
+                    result = insert_before_line(**function_args)
+                elif function_name == "execute_command":
+                    # Show feedback before executing
+                    print(format_tool_feedback("execute_command", function_args))
+                    result = execute_command(**function_args)
+                else:
+                    result = {"status": "error", "message": "Unknown function"}
+
+                # Append the tool response
+                tool_response = {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": function_name,
+                    "content": json.dumps(result),
+                }
+                messages.append(tool_response)
+
+            # For non-plan tools, get final response after execution
+            if function_name != "create_plan":
+                history_manager.append_message(tool_response)
+                return call_llm(messages=messages, model=selected_model)
+
+        # DeepSeek v3 sometimes returns JSON‑formatted tool calls in plain text.
+        # Detect a ```json``` block, execute any tool_calls_requested, then recurse.
+        json_payload = extract_json(response_message.content.strip())
+        if json_payload and json_payload.get("tool_calls_requested"):
+            for tool in json_payload["tool_calls_requested"]:
+                tool_type = tool.get("tool")
+                # Dispatch by tool type
+                if tool_type == "execute_command":
+                    print(format_tool_feedback("execute_command", tool))
+                    cmd = tool.get("command")
+                    if not cmd:
+                        continue
+                    result = execute_command(
+                        reasoning=tool.get("reasoning", ""),
+                        command=cmd,
+                        params=tool.get("params", [])
+                    )
+                elif tool_type == "create_plan":
+                    print(format_tool_feedback("create_plan", tool))
+                    result = create_plan(
+                        reasoning=tool.get("reasoning", ""),
+                        steps=tool["steps"]
+                    )
+                elif tool_type == "write_to_file":
+                    print(format_tool_feedback("write_to_file", tool))
+                    result = write_to_file(
+                        reasoning=tool.get("reasoning", ""),
+                        filename=tool["filename"],
+                        content=tool["content"]
+                    )
+                elif tool_type in {"modify_file", "replace_line", "insert_before_line"}:
+                    op = tool.get("operation", "replace")
+                    if op == "insert":
+                        print(format_tool_feedback("insert_before_line", tool))
+                        result = insert_before_line(
+                            reasoning=tool.get("reasoning", ""),
+                            filename=tool["filename"],
+                            linenumber=tool["linenumber"],
+                            content=tool["content"]
+                        )
+                    else:
+                        print(format_tool_feedback("replace_line", tool))
+                        result = replace_line(
+                            reasoning=tool.get("reasoning", ""),
+                            filename=tool["filename"],
+                            linenumber=tool["linenumber"],
+                            content=tool["content"]
+                        )
+                elif tool_type == "text_response":
+                    if tool.get("reasoning"):
+                        print(f"\\033[32m{tool['reasoning']}\\033[0m")
+                    return tool["text"]
+                else:
+                    print(f"\\033[31mUnknown tool type: {tool_type}\\033[0m")
+
+                # Record tool outcome
+                messages.append({
+                    "role": "tool",
+                    "name": tool_type,
+                    "content": json.dumps(result)
+                })
+                history_manager.append_message(messages[-1])
+
+            # After executing all tools, recurse to get the assistant's follow‑up
+            return call_llm(messages=messages, model=selected_model)
+
+        # Check for bash code block pattern
+        content = response_message.content.strip()
+        lines = content.strip().splitlines()
+        if (
+            content.startswith("```bash")
+            and len(lines) >= 3
+            and lines[2].strip().endswith("```")
+        ):
+            # Extract the command line
+            command_line = content.splitlines()[1].strip()
+            # Split into command and args
+            parts = command_line.split()
+            command = parts[0]
+            params = parts[1:] if len(parts) > 1 else None
+            # Execute directly with feedback
+            print(
+                format_tool_feedback(
+                    "execute_command", {"command": command, "params": params}
+                )
+            )
+            result = execute_command(command=command, params=params)
+
+            # Add the command and result to messages similar to tool calls
+            assistant_message = {"role": "assistant", "content": content}
+            messages.append(assistant_message)
+            history_manager.append_message(assistant_message)
+
+            command_result_message = {
+                "role": "user",
+                "content": f"Command executed: {command_line}\nResult: {json.dumps(result)}",
+            }
+            messages.append(command_result_message)
+            history_manager.append_message(command_result_message)
+
+            print("asking a second time for bash command")
+            # Get the final response after command execution using recursive call
+            return call_llm(
+                messages=messages,
+                model=selected_model,
+            )
+
+        # Look for code‑block tool calls (python/json/code/xml)
+        code_block_tools = extract_tool_calls_from_code_blocks(content)
+        if code_block_tools:
+            for tool in code_block_tools:
+                tool_type = tool.get("tool")
+                if tool_type == "execute_command":
+                    print(format_tool_feedback("execute_command", tool))
+                    result = execute_command(
+                        reasoning=tool.get("reasoning", ""),
+                        command=tool["command"],
+                        params=tool.get("params", []),
+                    )
+                elif tool_type == "create_plan":
+                    print(format_tool_feedback("create_plan", tool))
+                    result = create_plan(
+                        reasoning=tool.get("reasoning", ""),
+                        steps=tool["steps"],
+                    )
+                elif tool_type == "write_to_file":
+                    print(format_tool_feedback("write_to_file", tool))
+                    result = write_to_file(
+                        reasoning=tool.get("reasoning", ""),
+                        filename=tool["filename"],
+                        content=tool["content"],
+                    )
+                elif tool_type == "replace_line":
+                    print(format_tool_feedback("replace_line", tool))
+                    result = replace_line(
+                        reasoning=tool.get("reasoning", ""),
+                        filename=tool["filename"],
+                        linenumber=tool["linenumber"],
+                        content=tool["content"],
+                    )
+                elif tool_type == "insert_before_line":
+                    print(format_tool_feedback("insert_before_line", tool))
+                    result = insert_before_line(
+                        reasoning=tool.get("reasoning", ""),
+                        filename=tool["filename"],
+                        linenumber=tool["linenumber"],
+                        content=tool["content"],
+                    )
+                else:
+                    continue  # Unknown tool, skip
+
+                # Record tool response
+                messages.append(
+                    {
+                        "role": "tool",
+                        "name": tool_type,
+                        "content": json.dumps(result),
+                    }
+                )
+                history_manager.append_message(messages[-1])
+
+            # Recurse to let the assistant generate the follow‑up answer
+            return call_llm(messages=messages, model=selected_model)
+
+        # Remove any thinking tags and get just the answer content
+        answer = content
+        for tag in ("</think>", "</thinking>"):
+            if tag in answer:
+                answer = answer.split(tag, 1)[1].strip()
+
+        # If the assistant returned nothing, summarise the last tool output
+        if answer.strip() == "":
+            for msg in reversed(messages):
+                if msg.get("role") == "tool":
+                    tool_name = msg.get("name", "")
+                    try:
+                        result = json.loads(msg.get("content", "{}"))
+                    except Exception:
+                        break
+                    if tool_name == "execute_command":
+                        stdout = (result.get("stdout") or "").strip().splitlines()
+                        answer = "\n".join(stdout[:20])
+                    else:
+                        answer = json.dumps(result, indent=2)[:400]
+                    break
+
+        return answer
+    except Exception as e:
+        print(messages)
+        print(e)
+        print(f"Error with primary model: {str(e)}", file=sys.stderr)
+        # stack trace
+        print(traceback.format_exc())
+        exit(0)
+
+        # If Deepseek failed, try Groq as fallback
+        if os.environ.get("USE_DEEPSEEK_FOR_SMART", "true").lower() == "true":
+            try:
+                response = client.chat.completions.create(
+                    messages=messages,
+                    model=os.environ.get("GROQ_SMART_MODEL", "llama-3.3-70b-versatile"),
+                )
+                return response.choices[0].message.content
+            except Exception as fallback_e:
+                print(f"Error with fallback model: {str(fallback_e)}", file=sys.stderr)
+                raise fallback_e
+        raise e
+
+
+def write_to_file(*, reasoning: str = "", filename: str, content: str) -> Dict:
+    """Function to write content to a file"""
+    try:
+        with open(filename, "w") as f:
+            f.write(content)
+        return {"status": "success", "message": f"Content written to {filename}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def create_plan(*, reasoning: str = "", steps: List[str]) -> Dict:
+    """Function to create a step-by-step plan"""
+    return {
+        "status": "success",
+        "message": f"Created plan with {len(steps)} steps",
+        "steps": steps,
+    }
+
+
+def format_tool_feedback(tool_name: str, params: Dict) -> str:
+    """Format tool call feedback for user display"""
+    # Print reasoning in darker green
+    reasoning = params.get("reasoning", "")
+    if reasoning:
+        print(f"\033[32m{reasoning}\033[0m")
+
+    # Create a short summary of the params
+    param_summary = ""
+    if tool_name == "create_plan":
+        steps = params.get("steps", [])
+        step_summary = "\n".join(
+            f"  {i+1}. {step}" for i, step in enumerate(steps[:10])
+        )
+        if len(steps) > 10:
+            step_summary += f"\n  ... and {len(steps)-10} more steps"
+        return f"\033[92m<{tool_name}>\033[0m\n{step_summary}"
+    if tool_name == "write_to_file":
+        filename = params.get("filename", "")
+        content_preview = (
+            (params.get("content", "")[:50] + "...")
+            if len(params.get("content", "")) > 50
+            else params.get("content", "")
+        )
+        param_summary = f"{filename}: {content_preview}"
+    elif tool_name == "replace_line":
+        filename = params.get("filename", "")
+        linenumber = params.get("linenumber", 0)
+        content_preview = (
+            (params.get("content", "")[:50] + "...")
+            if len(params.get("content", "")) > 50
+            else params.get("content", "")
+        )
+        param_summary = f"{filename}:{linenumber} -> {content_preview}"
+    elif tool_name == "insert_before_line":
+        filename = params.get("filename", "")
+        linenumber = params.get("linenumber", 0)
+        content_preview = (
+            (params.get("content", "")[:50] + "...")
+            if len(params.get("content", "")) > 50
+            else params.get("content", "")
+        )
+        param_summary = f"{filename}:{linenumber} <- {content_preview}"
+    elif tool_name == "execute_command":
+        command = params.get("command", "")
+        params_list = params.get("params", [])
+        param_summary = f"{command} {' '.join(params_list)}"
+
+    # Format with bright green highlight
+    return f"\033[92m<{tool_name}>\033[0m {param_summary}"
+
+
+def modify_file_lines(filename: str, linenumber: int, content: str, mode: str) -> Dict:
+    """Helper function to modify file lines"""
+    try:
+        with open(filename, "r") as f:
+            lines = f.readlines()
+
+        linenumber = linenumber - 1  # Convert to 0-based index
+        if linenumber < 0 or linenumber >= len(lines):
+            return {
+                "status": "error",
+                "message": f"Line number {linenumber+1} is out of range",
+            }
+
+        if mode == "replace":
+            lines[linenumber] = content + "\n"
+        elif mode == "insert":
+            lines.insert(linenumber, content + "\n")
+
+        with open(filename, "w") as f:
+            f.writelines(lines)
+
+        return {
+            "status": "success",
+            "message": f"File {filename} modified successfully",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def replace_line(*, reasoning: str = "", filename: str, linenumber: int, content: str) -> Dict:
+    """Replace a specific line in a file"""
+    return modify_file_lines(filename, linenumber, content, "replace")
+
+
+def insert_before_line(
+    reasoning: str, filename: str, linenumber: int, content: str
+) -> Dict:
+    """Insert content before a specific line in a file"""
+    return modify_file_lines(filename, linenumber, content, "insert")
+
+
+def execute_command(*, reasoning: str = "", command: str, params: List[str] = None) -> Dict:
+    """Function to execute a shell command with optional parameters"""
+    try:
+        import subprocess
+
+        # If params are provided, join them with the command
+        full_command = command
+        if params:
+            full_command = f"{command} {' '.join(params)}"
+
+        result = subprocess.run(
+            full_command, shell=True, capture_output=True, text=True
+        )
+
+        # Print the first line of output in sky blue
+        if result.stdout:
+            first_line = result.stdout.splitlines()[0]
+            print(f"\033[96m<output>\033[0m {first_line}")
+
+        # Truncate stdout if too long
+        stdout = result.stdout
+        if stdout and len(stdout) > 1000:
+            stdout = stdout[:1000] + "\n...truncated too long"
+
+        return {
+            "status": "success",
+            "stdout": stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def extract_tool_calls_from_code_blocks(text: str) -> List[Dict]:
+    """
+    Find ```python|json|code|xml blocks and pull out function‑style tool calls
+    such as execute_command(...).  Returns a list of dicts ready for dispatch.
+    No regular expressions are used.
+    """
+    import textwrap
+
+    tool_calls: List[Dict] = []
+    if "```" not in text:
+        return tool_calls
+
+    segments = text.split("```")
+    # Odd indices (1,3,5,...) are the code‑block parts
+    for i in range(1, len(segments), 2):
+        block = segments[i]
+        lines = block.splitlines()
+        if not lines:
+            continue
+        # Remove the language identifier (first line) if present
+        code_body = "\n".join(lines[1:]) if len(lines) > 1 else ""
+        snippet = textwrap.dedent(code_body).strip()
+        if not snippet:
+            continue
+        try:
+            node = ast.parse(snippet).body[0]
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                call = node.value
+                if isinstance(call.func, ast.Name):
+                    func_name = call.func.id
+                    if func_name in {
+                        "execute_command",
+                        "create_plan",
+                        "write_to_file",
+                        "replace_line",
+                        "insert_before_line",
+                    }:
+                        # Collect keyword args first
+                        kwargs = {
+                            kw.arg: ast.literal_eval(kw.value)
+                            for kw in call.keywords
+                        }
+
+                        # Map positional args to expected names
+                        pos = [ast.literal_eval(a) for a in call.args]
+                        if func_name == "execute_command":
+                            if len(pos) >= 1 and "reasoning" not in kwargs:
+                                kwargs["reasoning"] = pos[0]
+                            if len(pos) >= 2 and "command" not in kwargs:
+                                kwargs["command"] = pos[1]
+                            if len(pos) >= 3 and "params" not in kwargs:
+                                kwargs["params"] = pos[2]
+                        elif func_name == "create_plan":
+                            if len(pos) >= 1 and "reasoning" not in kwargs:
+                                kwargs["reasoning"] = pos[0]
+                            if len(pos) >= 2 and "steps" not in kwargs:
+                                kwargs["steps"] = pos[1]
+                        elif func_name in {"write_to_file", "replace_line", "insert_before_line"}:
+                            # Generic positional mapping if someone omits keywords
+                            param_order = {
+                                "write_to_file": ["reasoning", "filename", "content"],
+                                "replace_line": ["reasoning", "filename", "linenumber", "content"],
+                                "insert_before_line": ["reasoning", "filename", "linenumber", "content"],
+                            }[func_name]
+                            for idx, val in enumerate(pos):
+                                if idx < len(param_order) and param_order[idx] not in kwargs:
+                                    kwargs[param_order[idx]] = val
+
+                        tool_dict = {"tool": func_name}
+                        tool_dict.update(kwargs)
+                        tool_calls.append(tool_dict)
+        except Exception:
+            # Ignore unparsable code blocks
+            continue
+    return tool_calls
+
+
+def format_messages_for_summary(messages: List[Dict]) -> str:
+    """Format messages into compact text structure for summarization"""
+    lines = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+
+        if role == "user":
+            lines.append(f"user: {content}")
+        elif role == "assistant":
+            # Check if this is a tool call description or regular response
+            if content.startswith("Requested ") or content.startswith("Executed "):
+                # This is a paraphrased tool call
+                lines.append(f"assistant: [tool call: {content}]")
+            elif content.startswith("Tool ") and " result " in content:
+                # This is a paraphrased tool result
+                lines.append(f"tool: [result: {content}]")
+            else:
+                lines.append(f"assistant: {content}")
+        elif role == "tool":
+            lines.append(f"tool: {content}")
+
+    return "\n".join(lines)
+
+
+def summarize_conversation(conversation_text: str) -> str:
+    """Use fast LLM to create compact summary of conversation"""
+    summarization_prompt = """You are compacting chat history for token efficiency.
+
+Paraphrase/summarize each message as text chunks.
+
+IMPORTANT: keep the turn by turn chat/tool format, but Paraphrase/summarize the content of each turn
+
+Convert the conversation into concise format using these exact labels:
+- user: [user message]
+- assistant: [assistant response]
+- assistant: [tool call: function_name brief_args]
+- tool: [result: brief_output]
+
+Keep each entry to ~100-300 characters. Preserve key context and outcomes. Paraphrase/summarize content while maintaining important information.
+
+Format output as plain text with the structure above. Do not add any explanations or meta-commentary."""
+
+    try:
+        print(f"Calling LLM to summarize {len(conversation_text)} characters...")
+        summary = call_llm(
+            messages=[
+                {"role": "system", "content": summarization_prompt},
+                {"role": "user", "content": f"Compact this conversation:\n\n{conversation_text}"},
+            ],
+            model="google/gemini-2.5-flash-lite"
+        )
+        print(f"LLM returned summary of {len(summary)} characters")
+        if not summary or not summary.strip():
+            print("Warning: LLM returned empty summary, using original text", file=sys.stderr)
+            return conversation_text
+        return summary
+    except Exception as e:
+        print(f"Warning: Failed to compact history: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return conversation_text  # Return original if summarization fails
+
+
+def compact_history() -> str:
+    """Load all history, summarize it compactly, save as single entry"""
+    # Load all history
+    all_messages = []
+    history = history_manager._load_history()
+
+    for thread in history:
+        all_messages.extend(thread.get("messages", []))
+
+    if not all_messages:
+        return "No history to compact."
+
+    # Build conversation text from messages
+    conversation_text = format_messages_for_summary(all_messages)
+
+    # Call fast LLM to summarize
+    print(f"Compacting {len(all_messages)} messages from {len(history)} threads...")
+    summary = summarize_conversation(conversation_text)
+
+    # Clear history and save single compact entry
+    history_manager.history_file.unlink(missing_ok=True)
+    compact_thread = {
+        "timestamp": datetime.now().isoformat(),
+        "messages": [{"role": "assistant", "content": summary}]
+    }
+    history_manager._save_history([compact_thread])
+
+    return summary
+
+
+def show_history_summary() -> None:
+    """Display summary of history without modifying it"""
+
+    # Check file size and suggest compacting if needed
+    if history_manager.history_file.exists():
+        file_size = history_manager.history_file.stat().st_size
+        if file_size > 10000:  # 10KB threshold
+            print(f"* suggest compacting: History file is {file_size:,} bytes (>{10000:,} bytes)")
+            print()
+
+    # Load all history
+    all_messages = []
+    history = history_manager._load_history()
+
+    for thread in history:
+        all_messages.extend(thread.get("messages", []))
+
+    if not all_messages:
+        print("No history to summarize.")
+        return
+
+    # Build conversation text and summarize (reuse existing functions)
+    conversation_text = format_messages_for_summary(all_messages)
+    print(f"Summarizing {len(all_messages)} messages from {len(history)} threads...")
+    summary = summarize_conversation(conversation_text)
+
+    # Display summary
+    print()
+    print("=" * 60)
+    print("HISTORY SUMMARY (read-only)")
+    print("=" * 60)
+    print(summary)
+    print("=" * 60)
+    print()
+    print(f"Summary generated from {len(all_messages)} messages ({len(summary)} characters)")
+
+
+def handle_file_operation(operation_type: str, data: Dict) -> str:
+    """Handle file operations from JSON data"""
+    try:
+        if operation_type == "write_to_file":
+            result = write_to_file(
+                reasoning=data.get("reasoning", ""),
+                filename=data["filename"],
+                content=data["content"],
+            )
+        elif operation_type == "replace_line":
+            result = replace_line(
+                reasoning=data.get("reasoning", ""),
+                filename=data["filename"],
+                linenumber=data["linenumber"],
+                content=data["content"],
+            )
+        elif operation_type == "insert_before_line":
+            result = insert_before_line(
+                reasoning=data.get("reasoning", ""),
+                filename=data["filename"],
+                linenumber=data["linenumber"],
+                content=data["content"],
+            )
+        else:
+            return "Unknown file operation"
+
+        return f"{operation_type} result: {json.dumps(result)}"
+    except KeyError as e:
+        return f"Missing required field: {str(e)}"
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: ask <question> [file1] [file2] ...")
+        sys.exit(1)
+
+    # Read environment variables
+    env_vars = read_env_file()
+    os.environ.update(env_vars)
+
+    # Check for clear history flag
+    if "--clear" in sys.argv:
+        history_manager.history_file.unlink(missing_ok=True)  # Delete history file
+        print("History cleared.")
+        sys.argv.remove("--clear")  # Remove the flag from arguments
+        sys.exit(0)  # Exit after clearing history
+
+    # Check for compact history flag
+    if "--compact" in sys.argv:
+        summary = compact_history()
+        print("History compacted successfully!")
+        print(f"\nCompact summary ({len(summary)} characters):")
+        print("-" * 60)
+        print(summary)
+        print("-" * 60)
+        sys.exit(0)  # Exit after compacting history
+
+    # Check for summary flag
+    if "--summary" in sys.argv:
+        show_history_summary()
+        sys.exit(0)  # Exit after showing summary
+
+    # Initialize argument parser
+    parser = argparse.ArgumentParser(
+        description="Ask questions and perform tasks using a language model."
+    )
+    parser.add_argument("question", nargs="+", help="The question to ask.")
+    parser.add_argument(
+        "files", nargs="*", help="Optional files to provide context.", default=[]
+    )
+    parser.add_argument(
+        "--clear", action="store_true", help="Clear the chat history."
+    )
+    parser.add_argument(
+        "--compact", action="store_true", help="Compact and summarize all chat history."
+    )
+    parser.add_argument(
+        "--summary", action="store_true", help="Display summary of chat history without modifying it."
+    )
+    parser.add_argument("--fast", action="store_true", help="Use Gemini Flash model")
+    parser.add_argument("--alt", action="store_true", help="Use alternative model (Kimi K2)")
+    parser.add_argument("--model", type=str, help="Specify a custom model to use")
+
+    args = parser.parse_args()
+
+    # Handle clear history flag
+    if args.clear:
+        history_manager.history_file.unlink(missing_ok=True)
+        print("History cleared.")
+        sys.exit(0)
+
+    # Handle compact history flag
+    if args.compact:
+        summary = compact_history()
+        print("History compacted successfully!")
+        print(f"\nCompact summary ({len(summary)} characters):")
+        print("-" * 60)
+        print(summary)
+        print("-" * 60)
+        sys.exit(0)
+
+    # Check for OPENROUTER_API_KEY
+    if "OPENROUTER_API_KEY" not in os.environ:
+        print("Error: OPENROUTER_API_KEY not found in environment variables")
+        sys.exit(1)
+
+    # Process arguments and build context
+    files_content = []
+    question = []
+
+    # Process files
+    for arg in args.files:
+        file_content, truncated = get_file_content(arg)
+        if file_content is not None:
+            files_content.append(
+                {"path": arg, "content": file_content, "truncated": truncated}
+            )
+            question.append(f"[File content from: {arg}]")
+            if truncated:
+                question.append("(First 100 lines of file:)")
+            question.append(file_content)
+
+    # Combine question parts
+    question.extend(args.question)
+
+    # Check for piped input
+    if not sys.stdin.isatty():
+        piped_content = sys.stdin.read().strip()
+        if piped_content:
+            files_content.append(
+                {"path": "<stdin>", "content": piped_content, "truncated": False}
+            )
+            question.append("[Content from stdin:]")
+            question.append(piped_content)
+
+    # Check for stderr input
+    if not sys.stderr.isatty() and getattr(sys.stderr, "readable", lambda: False)():
+        try:
+            stderr_content = sys.stderr.read().strip()
+        except io.UnsupportedOperation:
+            stderr_content = ""
+        if stderr_content:
+            files_content.append(
+                {"path": "<stderr>", "content": stderr_content, "truncated": False}
+            )
+            question.append("[Content from stderr:]")
+            question.append(stderr_content)
+
+    # Build the prompt and messages
+    question_str = "\n".join(question)
+    system_prompt = f"""# Terminal Assistant Prompt
+
+## Overview
+You are a helpful command-line assistant providing terminal execution and answers to a user. 
+Provide help and utility to the user by executing functions/commands and providing answers.
+You have access to the PC via the terminal - use your tools/functions to help the user.
+Your responses should be formatted appropriately for terminal display and context-aware based on the user's environment.
+The user maybe be asking a question or for a task to be done.
+
+## Environment Context
+OS: {platform.system()} {platform.release()}
+PWD: {os.getcwd()}
+Shell: {os.environ.get("SHELL", "unknown")}
+
+##
+- when thinking provide your thoughts in <think> </think> xml tags.
+- if you have an preamble or postamble, provide it in <think> </think> xml tags.
+
+## Operating Procedures
+  
+### Task Execution Flow (Refined)
+1. **Understand the Task**  
+   - Identify what the user is asking for and assess how complex the request is.
+2. **Decide on Approach**  
+   - If the task is **simple**, proceed directly with solving the problem.  
+   - If the task is **complex**, start by creating a plan using `create_plan`.
+3. **Propose/Refine Steps**  
+   - If you create a plan, present it for **user feedback** or approval before carrying it out.  
+   - Adjust your approach as needed based on feedback.
+4. **Execute and Validate**  
+   - Implement your chosen steps one by one.  
+   - Validate the results after each significant operation to ensure correctness.
+5. **Iterate with Feedback**  
+   - You will receive feedback on each completed task or subtask.  
+   - Use this feedback to refine your next steps, as there may be multiple opportunities to adjust your approach.
+6. **Deliver the Final Answer**  
+   - Once you have completed all necessary actions and validations, provide a concise, clear response to the user summarizing your findings.
+
+
+## Tools calls
+- dont request interactive tools, like nano, vim, etc.
+- make sure you use option like -y for apt, etc. to avoid interactive prompts.
+    
+### File Handling
+* Use `execute_command` with `cat -n` to obtain line numbers before file modifications
+* "tool": "write_to_file", "tool": "modify_file",
+* For large files, use `head` or `tail` as appropriate
+* Always verify file contents after modifications
+
+### Safety and Validation
+* Provide clear reasoning for all operations
+* Include explicit testing steps in plans
+* Verify results after executing commands
+* Maintain backup copies of modified files when appropriate
+
+### User Interaction
+* Format all responses for terminal readability
+* Wait for explicit user confirmation before executing plans
+* Build trust through clear communication and validation
+* Provide progress updates during multi-step operations
+* "tool": "text_response"
+
+"""
+    system_prompt += """
+## Available Functions
+
+### File Operations
+* `write_to_file(reasoning, filename, content)`
+  * Purpose: Write content to a file
+  
+* `replace_line(reasoning, filename, linenumber, content)`
+  * Purpose: Replace specific line in a file
+  
+* `insert_before_line(reasoning, filename, linenumber, content)`
+  * Purpose: Insert content before specific line
+
+### Command Execution
+* `execute_command(reasoning, command)`
+  * Purpose: Execute shell commands
+  * Common usage: `execute_command("Need line numbers for file modification", "cat -n filename")`
+
+### Task Management
+* `create_plan(reasoning, [steps])`
+  * Purpose: Create step-by-step execution plans
+  * Must include testing/validation steps where appropriate
+  * once you have an approved plan, no need to call `create_plan` again
+"""
+
+    if files_content:
+        system_prompt += "\nThe following files/content were provided:\n"
+        for fc in files_content:
+            system_prompt += f"\n- File: {fc['path']}"
+            if fc["truncated"]:
+                system_prompt += " (truncated to first 100 lines)"
+            system_prompt += f"\nContent:\n{fc['content']}\n"
+
+    # Prepare messages with history
+    messages = []
+    # history_manager.append_message({"role": "system", "content": system_prompt})
+    messages.append({"role": "system", "content": system_prompt})
+
+    # Add recent history
+    recent_messages = history_manager.get_recent_messages()
+    messages.extend(recent_messages)
+
+    # Add current question
+    user_message = {"role": "user", "content": question_str}
+    # print("appending user message: ", user_message)
+    history_manager.append_message(user_message)
+
+    messages.append(user_message)
+
+    # print("kicking off with:", messages)
+    # sys.exit(0)
+
+    # Set model based on flags
+    if args.model:
+        selected_model = args.model
+    elif args.fast:
+        selected_model = "google/gemini-2.5-flash-lite"
+    elif args.alt:
+        selected_model = "moonshotai/kimi-k2-thinking"
+    else:
+        selected_model = "openai/gpt-5-mini"
+    print("selected model: ", selected_model)
+
+    # Make the API call
+    try:
+        answer = call_llm(
+            messages=messages,
+            model=selected_model,
+        )
+        print(answer)
+        if answer:
+            history_manager.append_message_simple("assistant", answer)
+        history_manager.finalize_thread()
+    except Exception as e:
+        print(f"Error: Failed to get response: {str(e)}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
