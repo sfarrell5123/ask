@@ -1462,8 +1462,20 @@ def main():
             print(f"\033[38;5;220m⚠ History: {file_size:,} bytes (>10KB) - Consider: ask --compact\033[0m", file=sys.stderr)
 
     # Initialize argument parser
+    # Build API key status for help text
+    openrouter_status = "✓ Available" if os.environ.get("OPENROUTER_API_KEY") else "✗ Not found"
+    tavily_status = "✓ Available" if (TAVILY_AVAILABLE and os.environ.get("TAVILY_API_KEY")) else "✗ Not found"
+
+    epilog_text = f"""
+API Key Status:
+  OPENROUTER_API_KEY: {openrouter_status}
+  TAVILY_API_KEY:     {tavily_status} (optional - enables web_search and read_web_url tools)
+"""
+
     parser = argparse.ArgumentParser(
-        description="Ask questions and perform tasks using a language model."
+        description="Ask questions and perform tasks using a language model.",
+        epilog=epilog_text,
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("question", nargs="+", help="The question to ask.")
     parser.add_argument(
