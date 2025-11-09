@@ -9,10 +9,10 @@ Stop context-switching. Stop googling command syntax. Just **ask**.
 ### Simple Things, Instantly
 
 ```bash
-./ask "find all log files over 100MB"
-./ask "what's taking up space in this directory?"
-./ask "describe this file" mystery_data.bin
-./ask "create a backup script for /var/www and schedule it daily at 3am"
+ask "find all log files over 100MB"
+ask "what's taking up space in this directory?"
+ask "describe this file" mystery_data.bin
+ask "create a backup script for /var/www and schedule it daily at 3am"
 ```
 
 No flags to remember. No syntax to look up. Just describe what you want.
@@ -20,7 +20,7 @@ No flags to remember. No syntax to look up. Just describe what you want.
 ### Complex Things, Safely
 
 ```bash
-./ask "review ext4 performance settings, update mount options and kernel params, then verify your changes"
+ask "review ext4 performance settings, update mount options and kernel params, then verify your changes"
 ```
 
 The assistant will:
@@ -33,10 +33,10 @@ For anything potentially destructive, it asks for confirmation first.
 ### Context That Persists
 
 ```bash
-./ask "check nginx error logs for issues"
+ask "check nginx error logs for issues"
 # ... response ...
 
-./ask "now fix the most critical one and restart the service"
+ask "now fix the most critical one and restart the service"
 # Remembers the previous analysis and applies the fix
 ```
 
@@ -46,53 +46,53 @@ Conversation history means you can iterate naturally, building on previous comma
 
 ### System Administration & Operations
 ```bash
-./ask "show disk usage sorted by size"
-./ask "optimize nginx config for 10k concurrent connections"
-./ask "check if port 8080 is in use and kill the process"
-./ask "find all processes using more than 1GB RAM"
-./ask "set up log rotation for /var/log/app"
-./ask "tune kernel parameters for database performance"
+ask "show disk usage sorted by size"
+ask "optimize nginx config for 10k concurrent connections"
+ask "check if port 8080 is in use and kill the process"
+ask "find all processes using more than 1GB RAM"
+ask "set up log rotation for /var/log/app"
+ask "tune kernel parameters for database performance"
 ```
 
 ### Security & Auditing
 ```bash
-./ask "scan this directory for files with suspicious permissions"
-./ask "check for open ports and identify the services"
-./ask "find all SUID binaries on the system"
-./ask "review SSH config for security issues"
-./ask "audit user accounts and identify inactive ones"
+ask "scan this directory for files with suspicious permissions"
+ask "check for open ports and identify the services"
+ask "find all SUID binaries on the system"
+ask "review SSH config for security issues"
+ask "audit user accounts and identify inactive ones"
 ```
 
 ### File Operations & Search
 ```bash
-./ask "find all log files over 100MB"
-./ask "locate config files modified in the last 24 hours"
-./ask "find duplicate files in this directory tree"
-./ask "what format is this file?" unknown.dat
-./ask "recursively find files containing 'password'"
+ask "find all log files over 100MB"
+ask "locate config files modified in the last 24 hours"
+ask "find duplicate files in this directory tree"
+ask "what format is this file?" unknown.dat
+ask "recursively find files containing 'password'"
 ```
 
 ### Backup & Scheduling
 ```bash
-./ask "create a backup script for /var/www and schedule it daily at 2am"
-./ask "set up incremental backups for /home to external drive"
-./ask "create a cron job to clean old logs every Sunday"
-./ask "backup database and upload to S3 bucket"
+ask "create a backup script for /var/www and schedule it daily at 2am"
+ask "set up incremental backups for /home to external drive"
+ask "create a cron job to clean old logs every Sunday"
+ask "backup database and upload to S3 bucket"
 ```
 
 ### Image & Media Manipulation
 ```bash
-./ask "convert all PNGs in this folder to webp"
-./ask "crop profile.jpg to 400x400 square, centered on faces"
-./ask "reduce video.mp4 file size to under 50MB"
-./ask "batch resize all images to 1920px wide"
+ask "convert all PNGs in this folder to webp"
+ask "crop profile.jpg to 400x400 square, centered on faces"
+ask "reduce video.mp4 file size to under 50MB"
+ask "batch resize all images to 1920px wide"
 ```
 
 ### Quick Code Analysis
 ```bash
-./ask "what does this script do?" mystery.sh
-./ask "find security vulnerabilities in this config" app.conf
-./ask "explain this function" utils.py
+ask "what does this script do?" mystery.sh
+ask "find security vulnerabilities in this config" app.conf
+ask "explain this function" utils.py
 ```
 
 ## Features
@@ -131,14 +131,35 @@ Conversation history means you can iterate naturally, building on previous comma
 
    **Note**: You can also set `OPENROUTER_API_KEY` as an environment variable instead of using a file.
 
+5. **Optional**: Make `ask` available system-wide:
+
+   **On Linux:**
+   ```bash
+   sudo ln -s $(pwd)/ask /usr/local/bin/ask
+   ```
+
+   **On macOS:**
+   Add an alias to your shell config (`~/.zshrc` or `~/.bash_profile`):
+   ```bash
+   # For systems using Python from Homebrew/Miniforge
+   alias ask='/path/to/python /Users/yourusername/dev/ask/ask'
+
+   # Or if the script's shebang works for you:
+   alias ask='/Users/yourusername/dev/ask/ask'
+   ```
+
+   After setup, you can use `ask` from anywhere instead of `./ask`
+
 ## Usage
 
 ### Basic Syntax
 
 ```bash
-./ask "your question or request"
-./ask "question about code" file1.py file2.py
+ask "your question or request"
+ask "question about code" file1.py file2.py
 ```
+
+**Note**: Use `./ask` if running from the script directory, or just `ask` if installed system-wide.
 
 ### Command-Line Options
 
@@ -233,32 +254,32 @@ The `--summary` command will suggest compacting if your history exceeds 10KB.
 ### Be Specific
 ```bash
 # Good
-./ask "find all files in /var/log larger than 500MB and compress them"
+ask "find all files in /var/log larger than 500MB and compress them"
 
 # Too vague
-./ask "clean up logs"
+ask "clean up logs"
 ```
 
 ### Use File Context
 ```bash
 # The AI can see the config and give better answers
-./ask "review this for security issues" /etc/ssh/sshd_config
+ask "review this for security issues" /etc/ssh/sshd_config
 
 # vs asking without context
-./ask "how do I secure SSH?"
+ask "how do I secure SSH?"
 ```
 
 ### Leverage History
 ```bash
-./ask "scan /var/www for security vulnerabilities"
-./ask "now fix the directory permissions you found"
-./ask "verify the permissions are correct"
+ask "scan /var/www for security vulnerabilities"
+ask "now fix the directory permissions you found"
+ask "verify the permissions are correct"
 ```
 
 ### Let It Plan
 For complex operations, let the assistant plan before executing:
 ```bash
-./ask "migrate this server from Apache to Nginx"
+ask "migrate this server from Apache to Nginx"
 # It will show you the plan and ask for confirmation
 ```
 
@@ -291,22 +312,22 @@ For complex operations, let the assistant plan before executing:
 
 ### Piping Output
 ```bash
-ls -la | ./ask "explain these permissions"
-journalctl -n 100 | ./ask "summarize error patterns"
-ps aux | ./ask "find the top memory consumers"
+ls -la | ask "explain these permissions"
+journalctl -n 100 | ask "summarize error patterns"
+ps aux | ask "find the top memory consumers"
 ```
 
 ### Monitoring & Alerts
 ```bash
-./ask "monitor system resources every 5 seconds and alert if CPU > 80%"
-./ask "watch /var/log/auth.log and alert on failed login attempts"
-./ask "create a health check script for nginx and mysql"
+ask "monitor system resources every 5 seconds and alert if CPU > 80%"
+ask "watch /var/log/auth.log and alert on failed login attempts"
+ask "create a health check script for nginx and mysql"
 ```
 
 ### Script Generation
 ```bash
-./ask "create a backup script for /var/www with rotation (keep last 7)" > backup.sh
-./ask "generate a log cleanup script that preserves last 30 days" > cleanup.sh
+ask "create a backup script for /var/www with rotation (keep last 7)" > backup.sh
+ask "generate a log cleanup script that preserves last 30 days" > cleanup.sh
 ```
 
 ## Open Source Contribution
@@ -337,5 +358,5 @@ Unlike typical AI chatbots, `ask` **does things**. It's not just generating text
 
 **Try it now:**
 ```bash
-./ask "show me what you can do"
+ask "show me what you can do"
 ```
