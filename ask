@@ -1268,7 +1268,7 @@ Format output as plain text with the structure above. Do not add any explanation
                 {"role": "system", "content": summarization_prompt},
                 {"role": "user", "content": f"Compact this conversation:\n\n{conversation_text}"},
             ],
-            model="microsoft/phi-4-reasoning-plus",
+            model="openrouter/polaris-alpha",
             extra_body_params={"thinking_budget": -1}  # -1 = auto (let model decide)
         )
         print(f"LLM returned summary of {len(summary)} characters")
@@ -1617,23 +1617,52 @@ Shell: {os.environ.get("SHELL", "unknown")}
     elif args.fast:
         selected_model = "google/gemini-2.5-flash-lite"
     elif args.alt:
-        selected_model = "moonshotai/kimi-k2-thinking"
+        # Try fallback chain: polaris-alpha -> kimi-k2-thinking -> gpt-5-mini
+        fallback_models = [
+            "openrouter/polaris-alpha",
+            "moonshotai/kimi-k2-thinking",
+            "openai/gpt-5-mini"
+        ]
+        selected_model = fallback_models[0]
     else:
         selected_model = "openai/gpt-5-mini"
     print("selected model: ", selected_model)
 
-    # Make the API call
-    try:
-        answer = call_llm(
-            messages=messages,
-            model=selected_model,
-        )
-        print(answer)
-        if answer:
-            history_manager.append_message({"role": "assistant", "content": answer})
-    except Exception as e:
-        print(f"Error: Failed to get response: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+    # Make the API call with fallback support for --alt
+    answer = None
+    if args.alt:
+        # Try each model in fallback chain
+        for i, model in enumerate(fallback_models):
+            try:
+                print(f"Trying model: {model}")
+                answer = call_llm(
+                    messages=messages,
+                    model=model,
+                )
+                print(f"✓ Success with {model}")
+                break
+            except Exception as e:
+                error_msg = str(e)
+                print(f"✗ {model} failed: {error_msg[:80]}", file=sys.stderr)
+                if i < len(fallback_models) - 1:
+                    print(f"  Falling back to {fallback_models[i+1]}...", file=sys.stderr)
+                else:
+                    print(f"Error: All fallback models failed", file=sys.stderr)
+                    sys.exit(1)
+    else:
+        # Normal single model call
+        try:
+            answer = call_llm(
+                messages=messages,
+                model=selected_model,
+            )
+        except Exception as e:
+            print(f"Error: Failed to get response: {str(e)}", file=sys.stderr)
+            sys.exit(1)
+
+    print(answer)
+    if answer:
+        history_manager.append_message({"role": "assistant", "content": answer})
 
 
 if __name__ == "__main__":
