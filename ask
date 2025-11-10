@@ -172,6 +172,74 @@ def extract_json(response: str) -> Optional[Dict]:
     return None
 
 
+def call_llm_simple(messages: List[Dict], model=None, extra_body_params: Dict = None) -> str:
+    """Simple LLM call without tools - for text-only tasks like summarization"""
+
+    selected_model = model or "openai/gpt-5-mini"
+
+    # Create OpenRouter client
+    openrouter_client = OpenAI(
+        api_key=os.environ["OPENROUTER_API_KEY"],
+        base_url="https://openrouter.ai/api/v1",
+    )
+
+    # Build extra_body if params provided
+    extra_body = extra_body_params if extra_body_params else None
+
+    # Retry logic for transient errors
+    max_retries = 3
+    retry_delay = 3
+
+    for attempt in range(max_retries):
+        try:
+            response = openrouter_client.chat.completions.create(
+                extra_headers={
+                    "HTTP-Referer": "https://ask.com",
+                    "X-Title": "ask",
+                },
+                model=selected_model,
+                messages=messages,
+                temperature=0,
+                max_tokens=4096,
+                # NO tools parameter - this is the key difference
+                extra_body=extra_body,
+            )
+            break  # Success, exit retry loop
+        except Exception as e:
+            error_str = str(e).lower()
+            # Check if it's a transient error
+            is_transient = (
+                "error code: 400" in error_str or
+                "unknown error in the model inference server" in error_str or
+                "error code: 500" in error_str or
+                "error code: 502" in error_str or
+                "error code: 503" in error_str or
+                "timeout" in error_str or
+                "connection" in error_str
+            )
+
+            if is_transient and attempt < max_retries - 1:
+                wait_time = retry_delay * (attempt + 1)
+                print(f"\033[38;5;208m⚠ Transient error: {str(e)[:80]}\033[0m", file=sys.stderr)
+                print(f"\033[38;5;208m⏳ Waiting {wait_time} seconds before retry {attempt + 2}/{max_retries}...\033[0m", file=sys.stderr)
+                time.sleep(wait_time)
+            else:
+                raise
+
+    # Simple response extraction
+    if response.usage.completion_tokens == 0:
+        return ""
+
+    content = response.choices[0].message.content.strip()
+
+    # Remove thinking tags if present
+    for tag in ("</think>", "</thinking>"):
+        if tag in content:
+            content = content.split(tag, 1)[1].strip()
+
+    return content
+
+
 def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -> str:
     """Unified function to call LLM with function calling via OpenRouter"""
     tools = [
@@ -1179,6 +1247,9 @@ REQUIREMENTS:
 - Each tool call = separate item with 300-char budget
 - Each tool result = separate item with 300-char budget
 
+IMPORTANT:
+- 300 character budget per turn/tool call/tool result
+
 EXAMPLE:
 Input assistant turn with tool call (2 items):
 "assistant: [tool_calls with command]"
@@ -1192,12 +1263,12 @@ Format output as plain text with the structure above. Do not add any explanation
 
     try:
         print(f"Calling LLM to summarize {len(conversation_text)} characters...")
-        summary = call_llm(
+        summary = call_llm_simple(
             messages=[
                 {"role": "system", "content": summarization_prompt},
                 {"role": "user", "content": f"Compact this conversation:\n\n{conversation_text}"},
             ],
-            model="google/gemini-2.5-flash-lite",
+            model="microsoft/phi-4-reasoning-plus",
             extra_body_params={"thinking_budget": -1}  # -1 = auto (let model decide)
         )
         print(f"LLM returned summary of {len(summary)} characters")
