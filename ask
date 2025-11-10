@@ -172,7 +172,7 @@ def extract_json(response: str) -> Optional[Dict]:
     return None
 
 
-def call_llm(messages: List[Dict], model=None) -> str:
+def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -> str:
     """Unified function to call LLM with function calling via OpenRouter"""
     tools = [
         {
@@ -365,11 +365,17 @@ def call_llm(messages: List[Dict], model=None) -> str:
         base_url="https://openrouter.ai/api/v1",
     )
 
+    # Merge extra_body parameters
+    extra_body = {}
+
     # Optional OpenRouter provider routing for DeepSeek v3
-    extra_body_params = {}
     if "deepseek" in selected_model.lower() and "v3" in selected_model.lower():
         provider_config = {"provider": {"order": ["DeepSeek", "DeepInfra"]}}
-        extra_body_params.update(provider_config)
+        extra_body.update(provider_config)
+
+    # Merge caller-provided extra_body params
+    if extra_body_params:
+        extra_body.update(extra_body_params)
 
     # Retry logic for transient errors
     max_retries = 3
@@ -388,7 +394,7 @@ def call_llm(messages: List[Dict], model=None) -> str:
                     max_tokens=4096,
                     tools=tools,
                     tool_choice="auto",
-                    extra_body=extra_body_params if extra_body_params else None,
+                    extra_body=extra_body if extra_body else None,
                 )
             break  # Success, exit retry loop
         except Exception as e:
@@ -1129,22 +1135,58 @@ def format_messages_for_summary(messages: List[Dict]) -> str:
 
 def summarize_conversation(conversation_text: str) -> str:
     """Use fast LLM to create compact summary of conversation"""
-    summarization_prompt = """You are compacting chat history for token efficiency.
+    summarization_prompt = """Your task: Compress conversation history to reduce token usage while preserving all important information.
 
-Paraphrase/summarize each message as text chunks.
+OUTPUT FORMAT:
+Use exactly these labels for each turn:
+- user: [message content]
+- assistant: [response content]  
+- assistant: [tool call: function_name with parameters and reasoning]
+- tool: [result: key outputs or data]
 
-IMPORTANT: 
-- keep the turn by turn chat/tool format, but Paraphrase/summarize the content of each turn
-- do not truncate - summarize or paraphrase instead
-- allow up to 300 characters per turn
+COMPRESSION RULES:
+1. Maximum 300 characters PER ITEM (each user message, each assistant response, each tool call, each tool result)
+2. For turns with multiple tool calls: treat EACH tool call as a separate item with its own 300-char budget
+3. For tool results: Each result gets its own 300-char budget to preserve key data/outputs
 
-Convert the conversation into concise format using these exact labels:
-- user: [user message]
-- assistant: [assistant response]
-- assistant: [tool call: function_name brief_args]
-- tool: [result: brief_output]
+4. If item is already under 300 characters:
+   - Keep the core content mostly intact
+   - Remove filler words, redundancy, and verbose phrasing
+   - Compress language where possible without losing meaning
 
-Keep each entry to ~100-300 characters per turn. Preserve key context and outcomes. Paraphrase/summarize content while maintaining important information.
+5. If item exceeds 300 characters:
+   - Paraphrase into concise summary
+   - Keep all key facts, decisions, and outcomes
+   - Preserve technical details, names, numbers, and specific requests
+
+SPECIAL HANDLING FOR TOOL CALLS:
+- Include: function name, key parameters/arguments, and reasoning (if present)
+- Format: [tool call: function_name(param1, param2) - reasoning]
+- Use full 300-char budget to preserve command details and context
+- Example: [tool call: execute_command("git log --oneline -10 --format='%h %ad %s' --date=short") - Get detailed commit info with dates]
+
+SPECIAL HANDLING FOR TOOL RESULTS:
+- keep 300 characters of actual data/output - compressed/summarized/paraphrased to preserve as much meaning as possible.
+- Include key numbers, strings, error messages, or data returned
+- Use full 300-char budget to keep meaningful results
+- Example: [result: 12 total commits. Latest: 81b66a6 (Nov 10) refactor OpenAI format, a080276 (Nov 9) Tavily search, b0f6ea4 (Nov 9) API key fixes, etc.]
+
+REQUIREMENTS:
+- Maintain the exact sequence of all turns and tool calls
+- Never skip or truncate turns
+- Keep factual accuracy - don't invent or change meaning
+- Preserve context needed for future turns to make sense
+- Each tool call = separate item with 300-char budget
+- Each tool result = separate item with 300-char budget
+
+EXAMPLE:
+Input assistant turn with tool call (2 items):
+"assistant: [tool_calls with command]"
+"tool: [long result with git log output]"
+
+Output (2 items, each up to 300 chars):
+"assistant: [tool call: execute_command('git log --oneline -10') - Check recent commits and their messages]"
+"tool: [result: 10 commits shown: 81b66a6 refactor OpenAI format, a080276 add Tavily search, b0f6ea4 fix API key check, d7e1b65 load env vars early, 644b2cc show API status in help]"
 
 Format output as plain text with the structure above. Do not add any explanations or meta-commentary."""
 
@@ -1155,7 +1197,8 @@ Format output as plain text with the structure above. Do not add any explanation
                 {"role": "system", "content": summarization_prompt},
                 {"role": "user", "content": f"Compact this conversation:\n\n{conversation_text}"},
             ],
-            model="google/gemini-2.5-flash-lite"
+            model="google/gemini-2.5-flash-lite",
+            extra_body_params={"thinking_budget": -1}  # -1 = auto (let model decide)
         )
         print(f"LLM returned summary of {len(summary)} characters")
         if not summary or not summary.strip():
