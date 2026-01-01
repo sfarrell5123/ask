@@ -843,8 +843,10 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
         raise e
 
 
-def write_to_file(*, reasoning: str = "", filename: str, content: str) -> Dict:
+def write_to_file(*, reasoning: str = "", filename: str, content: str, **kwargs) -> Dict:
     """Function to write content to a file"""
+    if kwargs:
+        print(f"\033[33m⚠ Ignoring unknown params: {', '.join(kwargs.keys())}\033[0m", file=sys.stderr)
     try:
         with open(filename, "w") as f:
             f.write(content)
@@ -853,8 +855,10 @@ def write_to_file(*, reasoning: str = "", filename: str, content: str) -> Dict:
         return {"status": "error", "message": str(e)}
 
 
-def create_plan(*, reasoning: str = "", steps: List[str]) -> Dict:
+def create_plan(*, reasoning: str = "", steps: List[str], **kwargs) -> Dict:
     """Function to create a step-by-step plan"""
+    if kwargs:
+        print(f"\033[33m⚠ Ignoring unknown params: {', '.join(kwargs.keys())}\033[0m", file=sys.stderr)
     return {
         "status": "success",
         "message": f"Created plan with {len(steps)} steps",
@@ -952,20 +956,29 @@ def modify_file_lines(filename: str, linenumber: int, content: str, mode: str) -
         return {"status": "error", "message": str(e)}
 
 
-def replace_line(*, reasoning: str = "", filename: str, linenumber: int, content: str) -> Dict:
+def replace_line(*, reasoning: str = "", filename: str, linenumber: int, content: str, **kwargs) -> Dict:
     """Replace a specific line in a file"""
+    if kwargs:
+        print(f"\033[33m⚠ Ignoring unknown params: {', '.join(kwargs.keys())}\033[0m", file=sys.stderr)
     return modify_file_lines(filename, linenumber, content, "replace")
 
 
 def insert_before_line(
-    reasoning: str, filename: str, linenumber: int, content: str
+    reasoning: str = "", filename: str = "", linenumber: int = 0, content: str = "", **kwargs
 ) -> Dict:
     """Insert content before a specific line in a file"""
+    if kwargs:
+        print(f"\033[33m⚠ Ignoring unknown params: {', '.join(kwargs.keys())}\033[0m", file=sys.stderr)
     return modify_file_lines(filename, linenumber, content, "insert")
 
 
 def execute_command(*, reasoning: str = "", command, params: List[str] = None, timeout: int = None, **kwargs) -> Dict:
     """Function to execute a shell command with optional parameters"""
+    # Warn about unknown parameters so model learns what's supported
+    if kwargs:
+        unknown = ', '.join(kwargs.keys())
+        print(f"\033[33m⚠ Ignoring unknown params: {unknown}\033[0m", file=sys.stderr)
+
     try:
         import subprocess
 
@@ -1003,8 +1016,10 @@ def execute_command(*, reasoning: str = "", command, params: List[str] = None, t
         return {"status": "error", "message": str(e)}
 
 
-def web_search(*, reasoning: str = "", query: str) -> Dict:
+def web_search(*, reasoning: str = "", query: str, **kwargs) -> Dict:
     """Search the web using Tavily API"""
+    if kwargs:
+        print(f"\033[33m⚠ Ignoring unknown params: {', '.join(kwargs.keys())}\033[0m", file=sys.stderr)
     if not TAVILY_AVAILABLE:
         return {"status": "error", "message": "Tavily not available - install tavily-python"}
 
@@ -1034,8 +1049,10 @@ def web_search(*, reasoning: str = "", query: str) -> Dict:
         return {"status": "error", "message": str(e)}
 
 
-def read_web_url(*, reasoning: str = "", urls: List[str]) -> Dict:
+def read_web_url(*, reasoning: str = "", urls: List[str], **kwargs) -> Dict:
     """Extract content from web URLs using Tavily API"""
+    if kwargs:
+        print(f"\033[33m⚠ Ignoring unknown params: {', '.join(kwargs.keys())}\033[0m", file=sys.stderr)
     if not TAVILY_AVAILABLE:
         return {"status": "error", "message": "Tavily not available - install tavily-python"}
 
