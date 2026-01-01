@@ -964,7 +964,7 @@ def insert_before_line(
     return modify_file_lines(filename, linenumber, content, "insert")
 
 
-def execute_command(*, reasoning: str = "", command, params: List[str] = None) -> Dict:
+def execute_command(*, reasoning: str = "", command, params: List[str] = None, timeout: int = None, **kwargs) -> Dict:
     """Function to execute a shell command with optional parameters"""
     try:
         import subprocess
@@ -982,9 +982,10 @@ def execute_command(*, reasoning: str = "", command, params: List[str] = None) -
         if params:
             full_command = f"{command} {' '.join(params)}"
 
-        result = subprocess.run(
-            full_command, shell=True, capture_output=True, text=True
-        )
+        run_kwargs = {"shell": True, "capture_output": True, "text": True}
+        if timeout:
+            run_kwargs["timeout"] = timeout
+        result = subprocess.run(full_command, **run_kwargs)
 
         # Print the first line of output in sky blue
         if result.stdout:
