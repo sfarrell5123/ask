@@ -222,7 +222,7 @@ def call_llm_simple(messages: List[Dict], model=None, extra_body_params: Dict = 
     return content
 
 
-def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, base_url: str = None) -> str:
+def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, base_url: str = None, use_native_tools: bool = True) -> str:
     """Unified function to call LLM with function calling via OpenRouter or local Ollama"""
     tools = [
         {
@@ -443,9 +443,12 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
                 "messages": messages,
                 "temperature": 0,
                 "max_tokens": 4096,
-                "tools": tools,
-                "tool_choice": "auto",
             }
+            # Only use native tool calling if enabled and not Ollama
+            # (Ollama models often generate malformed JSON for tool calls)
+            if use_native_tools and not is_ollama:
+                request_kwargs["tools"] = tools
+                request_kwargs["tool_choice"] = "auto"
             # Add OpenRouter-specific headers only for non-Ollama
             if not is_ollama:
                 request_kwargs["extra_headers"] = {
@@ -552,7 +555,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
                 history_manager.append_message(tool_response)
 
             # After all tool calls processed, get final response
-            return call_llm(messages=messages, model=selected_model, base_url=base_url)
+            return call_llm(messages=messages, model=selected_model, base_url=base_url, use_native_tools=use_native_tools)
 
         # DeepSeek v3 sometimes returns JSON‑formatted tool calls in plain text.
         # Detect a ```json``` block, execute any tool_calls_requested, then recurse.
@@ -618,7 +621,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
                 history_manager.append_message(messages[-1])
 
             # After executing all tools, recurse to get the assistant's follow‑up
-            return call_llm(messages=messages, model=selected_model, base_url=base_url)
+            return call_llm(messages=messages, model=selected_model, base_url=base_url, use_native_tools=use_native_tools)
 
         # Check for bash code block pattern
         content = response_message.content.strip()
@@ -660,6 +663,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
                 messages=messages,
                 model=selected_model,
                 base_url=base_url,
+                use_native_tools=use_native_tools,
             )
 
         # Look for code‑block tool calls (python/json/code/xml)
@@ -717,7 +721,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
                 history_manager.append_message(messages[-1])
 
             # Recurse to let the assistant generate the follow‑up answer
-            return call_llm(messages=messages, model=selected_model, base_url=base_url)
+            return call_llm(messages=messages, model=selected_model, base_url=base_url, use_native_tools=use_native_tools)
 
         # Try XML format tool calls
         xml_tools = extract_xml_tool_calls(content)
@@ -779,7 +783,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
                 history_manager.append_message(messages[-1])
 
             # Recurse to get final response
-            return call_llm(messages=messages, model=selected_model, base_url=base_url)
+            return call_llm(messages=messages, model=selected_model, base_url=base_url, use_native_tools=use_native_tools)
 
         # Remove any thinking tags and get just the answer content
         answer = content
@@ -1474,6 +1478,7 @@ API Key Status:
     parser.add_argument("--alt", action="store_true", help="Use alternative model (Kimi K2)")
     parser.add_argument("--model", type=str, help="Specify a custom model to use")
     parser.add_argument("--ollama", action="store_true", help="Use local Ollama with gpt-oss:latest")
+    parser.add_argument("--no-tools", action="store_true", help="Disable native tool calling (use text-based fallback parsing)")
 
     args = parser.parse_args()
 
@@ -1660,6 +1665,7 @@ Shell: {os.environ.get("SHELL", "unknown")}
                 answer = call_llm(
                     messages=messages,
                     model=model,
+                    use_native_tools=not args.no_tools,
                 )
                 print(f"✓ Success with {model}")
                 break
@@ -1678,6 +1684,7 @@ Shell: {os.environ.get("SHELL", "unknown")}
                 messages=messages,
                 model=selected_model,
                 base_url=base_url,
+                use_native_tools=not args.no_tools,
             )
         except Exception as e:
             print(f"Error: Failed to get response: {str(e)}", file=sys.stderr)
