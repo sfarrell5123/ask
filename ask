@@ -495,6 +495,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
         response_message = response.choices[0].message
         tool_calls = response_message.tool_calls
 
+        # Process tool_calls (normalize parameter names for Ollama compatibility)
         if tool_calls:
             # Store the assistant message with tool calls using model_dump()
             assistant_msg = response_message.model_dump()
@@ -505,6 +506,12 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
             for tool_call in tool_calls:
                 function_name = tool_call.function.name
                 function_args = parse_tool_call_arguments(tool_call.function.arguments)
+
+                # Normalize parameter names (Ollama models may use different names)
+                if "cmd" in function_args and "command" not in function_args:
+                    function_args["command"] = function_args.pop("cmd")
+                if "args" in function_args and "params" not in function_args:
+                    function_args["params"] = function_args.pop("args")
 
                 if function_name == "create_plan":
                     print(format_tool_feedback("create_plan", function_args))
@@ -957,10 +964,18 @@ def insert_before_line(
     return modify_file_lines(filename, linenumber, content, "insert")
 
 
-def execute_command(*, reasoning: str = "", command: str, params: List[str] = None) -> Dict:
+def execute_command(*, reasoning: str = "", command, params: List[str] = None) -> Dict:
     """Function to execute a shell command with optional parameters"""
     try:
         import subprocess
+
+        # Handle command as list (some models send ['bash', '-c', 'actual command'])
+        if isinstance(command, list):
+            # If it's a bash -c style list, extract the actual command
+            if len(command) >= 3 and command[0] in ('bash', 'sh') and command[1] in ('-c', '-lc'):
+                command = command[2]
+            else:
+                command = ' '.join(command)
 
         # If params are provided, join them with the command
         full_command = command
