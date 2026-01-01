@@ -1666,8 +1666,9 @@ Shell: {os.environ.get("SHELL", "unknown")}
     # Set model based on flags
     base_url = None  # Default to OpenRouter
     if args.ollama:
-        selected_model = "gpt-oss:latest"
         base_url = "http://localhost:11434/v1"
+        # Use specified model or default to gpt-oss:latest
+        selected_model = args.model if args.model else "gpt-oss:latest"
     elif args.model:
         selected_model = args.model
     elif args.fast:
