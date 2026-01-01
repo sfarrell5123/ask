@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.11
+#!/usr/bin/env /home/notes/ask/base/bin/python
 
 import os
 import sys
@@ -14,6 +14,7 @@ import io
 import time
 from openai import OpenAI
 import traceback
+import json_repair
 
 # Optional Tavily import
 try:
@@ -26,34 +27,18 @@ json_decoder = json.JSONDecoder()
 
 
 def parse_tool_call_arguments(raw: Optional[str]) -> Dict:
-    """Best-effort parser for tool call arguments that may contain extra text."""
+    """Best-effort parser for tool call arguments that may contain extra text.
+    Uses json_repair to fix malformed JSON from LLMs."""
     if not raw:
         return {}
 
-    cleaned = raw.strip()
-
     try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        pass
-
-    try:
-        obj, _ = json_decoder.raw_decode(cleaned)
-        return obj
-    except json.JSONDecodeError:
-        pass
-
-    first_brace = cleaned.find("{")
-    if first_brace not in (-1, 0):
-        try:
-            obj, _ = json_decoder.raw_decode(cleaned[first_brace:])
-            return obj
-        except json.JSONDecodeError:
-            pass
-
-    preview = cleaned[:200].replace("\n", " ")
-    print(f"Warning: failed to parse tool call arguments: {preview}...", file=sys.stderr)
-    return {}
+        # json_repair.loads handles truncated, malformed, and dirty JSON
+        return json_repair.loads(raw.strip())
+    except Exception as e:
+        preview = raw[:200].replace("\n", " ")
+        print(f"Warning: json_repair failed: {e} - input: {preview}...", file=sys.stderr)
+        return {}
 
 
 class HistoryManager:
@@ -140,7 +125,8 @@ def get_file_content(filepath: str) -> tuple[str, bool]:
 
 
 def extract_json(response: str) -> Optional[Dict]:
-    """Extract JSON from response - handles both code blocks and raw JSON"""
+    """Extract JSON from response - handles both code blocks and raw JSON.
+    Uses json_repair to fix malformed JSON from LLMs."""
 
     if "</think>" in response:
         response = response.split("</think>", 1)[1].strip()
@@ -148,26 +134,22 @@ def extract_json(response: str) -> Optional[Dict]:
         response = response.split("</thinking>", 1)[1].strip()
 
     # Try code block first
-    try:
-        response = response.replace("```tool_calls", "```json")
-        match = re.search(r"```json\n(.*?)\n```", response, re.DOTALL)
-        if match:
-            return json.loads(match.group(1).strip())
-    except json.JSONDecodeError:
-        pass
+    response = response.replace("```tool_calls", "```json")
+    match = re.search(r"```json\n(.*?)\n```", response, re.DOTALL)
+    if match:
+        try:
+            return json_repair.loads(match.group(1).strip())
+        except Exception:
+            pass
 
-    # Try raw JSON (no code block)
-    try:
-        # Look for JSON object patterns
-        if '{' in response and '}' in response:
-            # Find first { and try to parse from there
-            start = response.find('{')
-            if start != -1:
-                # Try to decode from first brace
-                obj, _ = json_decoder.raw_decode(response[start:])
-                return obj
-    except (json.JSONDecodeError, ValueError):
-        pass
+    # Try raw JSON (no code block) - find first { and repair from there
+    if '{' in response:
+        start = response.find('{')
+        if start != -1:
+            try:
+                return json_repair.loads(response[start:])
+            except Exception:
+                pass
 
     return None
 
@@ -240,8 +222,8 @@ def call_llm_simple(messages: List[Dict], model=None, extra_body_params: Dict = 
     return content
 
 
-def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -> str:
-    """Unified function to call LLM with function calling via OpenRouter"""
+def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, base_url: str = None) -> str:
+    """Unified function to call LLM with function calling via OpenRouter or local Ollama"""
     tools = [
         {
             "type": "function",
@@ -427,10 +409,14 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -
     # Model selection logic
     selected_model = model or "openai/gpt-5-mini"
 
-    # Create OpenRouter client
+    # Determine base URL and API key
+    effective_base_url = base_url or "https://openrouter.ai/api/v1"
+    is_ollama = base_url and "localhost" in base_url
+
+    # Create client (Ollama doesn't need real API key)
     openrouter_client = OpenAI(
-        api_key=os.environ["OPENROUTER_API_KEY"],
-        base_url="https://openrouter.ai/api/v1",
+        api_key="ollama" if is_ollama else os.environ["OPENROUTER_API_KEY"],
+        base_url=effective_base_url,
     )
 
     # Merge extra_body parameters
@@ -451,19 +437,25 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -
 
     for attempt in range(max_retries):
         try:
-            response = openrouter_client.chat.completions.create(
-                    extra_headers={
-                        "HTTP-Referer": "https://ask.com",  # Optional: site URL
-                        "X-Title": "ask",                   # Optional: app name
-                    },
-                    model=selected_model,
-                    messages=messages,
-                    temperature=0,
-                    max_tokens=4096,
-                    tools=tools,
-                    tool_choice="auto",
-                    extra_body=extra_body if extra_body else None,
-                )
+            # Build request kwargs
+            request_kwargs = {
+                "model": selected_model,
+                "messages": messages,
+                "temperature": 0,
+                "max_tokens": 4096,
+                "tools": tools,
+                "tool_choice": "auto",
+            }
+            # Add OpenRouter-specific headers only for non-Ollama
+            if not is_ollama:
+                request_kwargs["extra_headers"] = {
+                    "HTTP-Referer": "https://ask.com",
+                    "X-Title": "ask",
+                }
+                if extra_body:
+                    request_kwargs["extra_body"] = extra_body
+
+            response = openrouter_client.chat.completions.create(**request_kwargs)
             break  # Success, exit retry loop
         except Exception as e:
             error_str = str(e).lower()
@@ -481,7 +473,9 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -
             if is_transient and attempt < max_retries - 1:
                 # Orange color for transient error warning
                 wait_time = retry_delay * (attempt + 1)  # Exponential backoff
-                print(f"\033[38;5;208m⚠ Transient error: {str(e)[:80]}\033[0m", file=sys.stderr)
+                # Show full error for Ollama (local debugging), truncate for OpenRouter
+                error_display = str(e) if is_ollama else str(e)[:80]
+                print(f"\033[38;5;208m⚠ Transient error: {error_display}\033[0m", file=sys.stderr)
                 print(f"\033[38;5;208m⏳ Waiting {wait_time} seconds before retry {attempt + 2}/{max_retries}...\033[0m", file=sys.stderr)
                 time.sleep(wait_time)
             else:
@@ -558,7 +552,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -
                 history_manager.append_message(tool_response)
 
             # After all tool calls processed, get final response
-            return call_llm(messages=messages, model=selected_model)
+            return call_llm(messages=messages, model=selected_model, base_url=base_url)
 
         # DeepSeek v3 sometimes returns JSON‑formatted tool calls in plain text.
         # Detect a ```json``` block, execute any tool_calls_requested, then recurse.
@@ -624,7 +618,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -
                 history_manager.append_message(messages[-1])
 
             # After executing all tools, recurse to get the assistant's follow‑up
-            return call_llm(messages=messages, model=selected_model)
+            return call_llm(messages=messages, model=selected_model, base_url=base_url)
 
         # Check for bash code block pattern
         content = response_message.content.strip()
@@ -665,6 +659,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -
             return call_llm(
                 messages=messages,
                 model=selected_model,
+                base_url=base_url,
             )
 
         # Look for code‑block tool calls (python/json/code/xml)
@@ -722,7 +717,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -
                 history_manager.append_message(messages[-1])
 
             # Recurse to let the assistant generate the follow‑up answer
-            return call_llm(messages=messages, model=selected_model)
+            return call_llm(messages=messages, model=selected_model, base_url=base_url)
 
         # Try XML format tool calls
         xml_tools = extract_xml_tool_calls(content)
@@ -784,7 +779,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -
                 history_manager.append_message(messages[-1])
 
             # Recurse to get final response
-            return call_llm(messages=messages, model=selected_model)
+            return call_llm(messages=messages, model=selected_model, base_url=base_url)
 
         # Remove any thinking tags and get just the answer content
         answer = content
@@ -810,12 +805,18 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None) -
 
         return answer
     except Exception as e:
-        print(messages)
-        print(e)
+        # Print debug info - last 2 messages only to avoid flooding
+        print("\n--- Debug: Last 2 messages ---", file=sys.stderr)
+        for msg in messages[-2:]:
+            role = msg.get("role", "?")
+            content = msg.get("content", "")
+            if len(content) > 500:
+                content = content[:500] + "..."
+            print(f"[{role}]: {content}", file=sys.stderr)
+        print("--- End debug ---\n", file=sys.stderr)
         print(f"Error with primary model: {str(e)}", file=sys.stderr)
-        # stack trace
-        print(traceback.format_exc())
-        exit(0)
+        print(traceback.format_exc(), file=sys.stderr)
+        exit(1)
 
         # If Deepseek failed, try Groq as fallback
         if os.environ.get("USE_DEEPSEEK_FOR_SMART", "true").lower() == "true":
@@ -1257,19 +1258,25 @@ Input assistant turn with tool call (2 items):
 
 Output (2 items, each up to 300 chars):
 "assistant: [tool call: execute_command('git log --oneline -10') - Check recent commits and their messages]"
-"tool: [result: 10 commits shown: 81b66a6 refactor OpenAI format, a080276 add Tavily search, b0f6ea4 fix API key check, d7e1b65 load env vars early, 644b2cc show API status in help]"
+"tool: [result: 10 commits shown: 81b66a6 refactor OpenAI format, a080276 add Tavily search, b0f6ea4 fix API key check, d7e1b65 load env vars early, 644b2cc show API status in help]
+
+BAD:
+tool (create_plan): {"status": "success", "message": "Created plan with 3 steps", "steps": ["Flush the swap by running '...  (don't snip the plan, we lost important information here)
+assistant: [tool calls: execute_command, execute_command, execute_command]"  (execute what command ? )
 
 Format output as plain text with the structure above. Do not add any explanations or meta-commentary."""
 
     try:
         print(f"Calling LLM to summarize {len(conversation_text)} characters...")
+        # NOTE: keep using gpt-5-mini here; avoid reverting to legacy 4o-mini.
+        # Keeping reasoning effort low (per OpenRouter reasoning token docs) to reduce latency.
         summary = call_llm_simple(
             messages=[
                 {"role": "system", "content": summarization_prompt},
                 {"role": "user", "content": f"Compact this conversation:\n\n{conversation_text}"},
             ],
-            model="openrouter/polaris-alpha",
-            extra_body_params={"thinking_budget": -1}  # -1 = auto (let model decide)
+            model="openai/gpt-5-mini",
+            extra_body_params={"reasoning": {"effort": "low"}}
         )
         print(f"LLM returned summary of {len(summary)} characters")
         if not summary or not summary.strip():
@@ -1466,6 +1473,7 @@ API Key Status:
     parser.add_argument("--fast", action="store_true", help="Use Gemini Flash model")
     parser.add_argument("--alt", action="store_true", help="Use alternative model (Kimi K2)")
     parser.add_argument("--model", type=str, help="Specify a custom model to use")
+    parser.add_argument("--ollama", action="store_true", help="Use local Ollama with gpt-oss:latest")
 
     args = parser.parse_args()
 
@@ -1571,6 +1579,11 @@ Shell: {os.environ.get("SHELL", "unknown")}
 
 ## Best Practices
 
+### efficiency
+* try to minimize the liekly output of commands. 
+* using grep for example, if you know the like you want, cat full.txt  vs cat full.txt|grep -i title  (this is much more efficient)
+* efficiency is important, helps keep things tight and focussed
+
 ### File Handling
 * Use `execute_command` with `cat -n` to obtain line numbers before file modifications
 * For large files, use `head` or `tail` as appropriate
@@ -1581,9 +1594,10 @@ Shell: {os.environ.get("SHELL", "unknown")}
 * Include explicit testing steps in plans
 * Verify results after executing commands
 * Maintain backup copies of modified files when appropriate
+* try not to make assumptions, gather information, like `date` if the date is important to the conversation. Or get the cmd line or python to do math for you, etc
 
 ### User Interaction
-* Format all responses for terminal readability
+* Format all responses for terminal readability. green tick for when things went well
 * Wait for explicit user confirmation before executing plans
 """
 
@@ -1612,14 +1626,21 @@ Shell: {os.environ.get("SHELL", "unknown")}
     # sys.exit(0)
 
     # Set model based on flags
-    if args.model:
+    base_url = None  # Default to OpenRouter
+    if args.ollama:
+        selected_model = "gpt-oss:latest"
+        base_url = "http://localhost:11434/v1"
+    elif args.model:
         selected_model = args.model
     elif args.fast:
         selected_model = "google/gemini-2.5-flash-lite"
     elif args.alt:
-        # Try fallback chain: polaris-alpha -> kimi-k2-thinking -> gpt-5-mini
+        # Try fallback chain: grok-code-fast -> kimi-k2-thinking -> gpt-5-mini
         fallback_models = [
-            "openrouter/polaris-alpha",
+           # "deepseek/deepseek-v3.2",
+         #   "nvidia/nemotron-3-nano-30b-a3b:free",
+"xiaomi/mimo-v2-flash:free",
+            "kwaipilot/kat-coder-pro:free",
             "x-ai/grok-code-fast-1",
             "moonshotai/kimi-k2-thinking",
             "openai/gpt-5-mini"
@@ -1656,6 +1677,7 @@ Shell: {os.environ.get("SHELL", "unknown")}
             answer = call_llm(
                 messages=messages,
                 model=selected_model,
+                base_url=base_url,
             )
         except Exception as e:
             print(f"Error: Failed to get response: {str(e)}", file=sys.stderr)
