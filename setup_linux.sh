@@ -27,3 +27,7 @@ ln -sf "$SCRIPT_DIR/ask" ~/bin/ask
 echo ""
 echo "Setup complete!"
 echo "Ensure ~/bin is in PATH: export PATH=\"\$HOME/bin:\$PATH\""
+echo ""
+
+# 6. Verify installation (also checks .env for API keys)
+"$SCRIPT_DIR/ask" --help
