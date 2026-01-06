@@ -488,7 +488,7 @@ def call_llm(messages: List[Dict], model=None, extra_body_params: Dict = None, b
     try:
 
         # Gracefully handle an empty assistant reply
-        if response.usage.completion_tokens == 0:
+        if response.usage and response.usage.completion_tokens == 0:
             return ""
 
         # print(response)
